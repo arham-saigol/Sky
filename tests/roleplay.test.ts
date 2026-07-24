@@ -268,6 +268,54 @@ describe("roleplay authorization and idempotency", () => {
     db.close();
   });
 
+  it("recovers a text event persisted before waiting for its thread", async () => {
+    const { root, db, characters } = await fixture();
+    const input = {
+      eventId: "owner-queued",
+      authorId: "owner",
+      guildId: "guild",
+      threadId: "thread",
+      content: "Queued before a crash",
+      createdAt: "2026-01-01T00:00:00.000Z"
+    };
+    expect(db.claimEvent(input.eventId, "MESSAGE_CREATE", input)).toBe(true);
+    db.recoverInterruptedWork();
+    const openCode = {
+      roleplay: vi.fn().mockResolvedValue({
+        content: "Recovered after restart.",
+        actualModel: "deepseek-v4-pro",
+        fellBack: false
+      })
+    };
+    const sender = {
+      sendText: vi.fn().mockResolvedValue("assistant-queued"),
+      sendVoice: vi.fn()
+    };
+    const engine = new RoleplayEngine(
+      "owner",
+      "guild",
+      root,
+      db,
+      characters,
+      openCode as never,
+      { transcribe: vi.fn() } as never,
+      { synthesize: vi.fn() } as never,
+      sender as never,
+      pino({ enabled: false })
+    );
+    await engine.recoverIncomplete(1, 1);
+    expect(
+      db.raw.prepare("SELECT role, content FROM messages ORDER BY id").all()
+    ).toEqual([
+      { role: "owner", content: "Queued before a crash" },
+      { role: "assistant", content: "Recovered after restart." }
+    ]);
+    expect(
+      db.incompleteEventPayloads("MESSAGE_CREATE")
+    ).toEqual([]);
+    db.close();
+  });
+
   it("serializes owner persistence with prompt generation per thread", async () => {
     const { root, db, characters } = await fixture();
     let releaseFirst: ((value: {

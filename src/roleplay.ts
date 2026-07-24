@@ -85,7 +85,7 @@ export class RoleplayEngine {
     message: InboundRoleplayMessage
   ): Promise<void> {
     if (!this.db.getSessionByThread(message.threadId)) return;
-    if (!this.db.claimEvent(message.eventId, "MESSAGE_CREATE")) return;
+    if (!this.db.claimEvent(message.eventId, "MESSAGE_CREATE", message)) return;
     try {
       await this.threads.runExclusive(message.threadId, async () => {
         const session = this.db.getSessionByThread(message.threadId);
@@ -150,7 +150,20 @@ export class RoleplayEngine {
     baseDelayMs = 1_000
   ): Promise<void> {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const persistedInputs =
+        this.db.incompleteEventPayloads<InboundRoleplayMessage>(
+          "MESSAGE_CREATE"
+        ).filter(
+          (input) => !this.db.hasMessageWithDiscordId(input.eventId)
+        );
+      const persistedIds = new Set(
+        persistedInputs.map((input) => input.eventId)
+      );
+      for (const input of persistedInputs) {
+        await this.handle(input);
+      }
       for (const input of this.db.incompleteVoiceInputs()) {
+        if (persistedIds.has(input.event_id)) continue;
         await this.handle({
           eventId: input.event_id,
           authorId: this.ownerId,
@@ -176,23 +189,38 @@ export class RoleplayEngine {
           item.session_id,
           item.trigger_id,
           item.source
-        ).catch((error) => {
-          this.logger.warn(
-            {
-              sessionId: item.session_id,
-              triggerId: item.trigger_id,
-              attempt,
-              error: safeErrorMessage(error)
-            },
-            attempt < maxAttempts
-              ? "Incomplete response recovery will retry"
-              : "Incomplete response recovery exhausted startup retries"
-          );
-        });
+        )
+          .then(() => this.db.completeEvent(item.trigger_id))
+          .catch((error) => {
+            this.logger.warn(
+              {
+                sessionId: item.session_id,
+                triggerId: item.trigger_id,
+                attempt,
+                error: safeErrorMessage(error)
+              },
+              attempt < maxAttempts
+                ? "Incomplete response recovery will retry"
+                : "Incomplete response recovery exhausted startup retries"
+            );
+          });
       }
-      const voiceRemaining = this.db.incompleteVoiceInputs().length;
+      const inboundRemaining =
+        this.db.incompleteEventPayloads<InboundRoleplayMessage>(
+          "MESSAGE_CREATE"
+        ).filter(
+          (input) => !this.db.hasMessageWithDiscordId(input.eventId)
+        ).length;
+      const legacyVoiceRemaining = this.db
+        .incompleteVoiceInputs()
+        .filter((input) => !persistedIds.has(input.event_id)).length;
       const outboundRemaining = this.db.incompleteOutbounds().length;
-      if (voiceRemaining === 0 && outboundRemaining === 0) return;
+      if (
+        inboundRemaining === 0 &&
+        legacyVoiceRemaining === 0 &&
+        outboundRemaining === 0
+      )
+        return;
       if (
         attempt < maxAttempts
       ) {
@@ -201,7 +229,12 @@ export class RoleplayEngine {
         );
       } else {
         this.logger.warn(
-          { voiceRemaining, outboundRemaining, attempts: maxAttempts },
+          {
+            inboundRemaining,
+            legacyVoiceRemaining,
+            outboundRemaining,
+            attempts: maxAttempts
+          },
           "Incomplete roleplay recovery exhausted startup retries"
         );
       }

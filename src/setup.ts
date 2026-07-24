@@ -44,6 +44,20 @@ function required(value: string): true | string {
   return value.trim() ? true : "This value is required";
 }
 
+export function resolveSecretPromptAnswer(
+  answer: string,
+  existing: string | undefined,
+  optional: boolean
+): string | undefined {
+  if (
+    optional &&
+    answer.trim().toLocaleUpperCase("en-US") === "CLEAR"
+  ) {
+    return undefined;
+  }
+  return answer || existing;
+}
+
 async function oldState(home?: string): Promise<{
   config?: SkyConfig;
   secrets?: SkySecrets;
@@ -67,12 +81,16 @@ async function secretPrompt(
   optional = false
 ): Promise<string | undefined> {
   const answer = await password({
-    message: existing ? `${message} (leave blank to keep current)` : message,
+    message: existing
+      ? optional
+        ? `${message} (leave blank to keep current; type CLEAR to remove)`
+        : `${message} (leave blank to keep current)`
+      : message,
     mask: "•",
     validate: (value) =>
       value || existing || optional ? true : "This key is required"
   });
-  return answer || existing;
+  return resolveSecretPromptAnswer(answer, existing, optional);
 }
 
 export async function runSetup(home: string): Promise<void> {

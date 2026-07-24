@@ -262,6 +262,118 @@ describe("dreamer and curator", () => {
     db.close();
   });
 
+  it("waits for a live turn before queuing its continuation", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "sky-curate-"));
+    roots.push(root);
+    const db = new SkyDatabase(path.join(root, "sky.sqlite"));
+    dbs.push(db);
+    const characters = new CharacterFiles(db, path.join(root, "characters"));
+    await characters.initialize();
+    const character = await characters.create({
+      name: "Mara",
+      identity: "A 29-year-old fictional adult.",
+      personality: "Careful.",
+      appearance: "An adult woman.",
+      settingAndBoundaries: "Fictional, consensual.",
+      voice: "Katie"
+    });
+    const session = db.createSession({
+      characterId: character.id,
+      threadId: "thread-live-continuation",
+      guildId: "guild",
+      lobbyChannelId: "lobby"
+    });
+    db.appendMessage({
+      sessionId: session.id,
+      discordMessageId: "owner-before-curation",
+      role: "owner",
+      content: "Earlier question",
+      source: "text"
+    });
+    db.appendMessage({
+      sessionId: session.id,
+      discordMessageId: "assistant-before-curation",
+      role: "assistant",
+      content: "Earlier answer",
+      source: "text",
+      triggeringDiscordMessageId: "owner-before-curation"
+    });
+    db.createCurationJob(session.id, "inactivity");
+    const state = await characters.read(character);
+    const result = JSON.stringify({
+      soul_markdown: state.soul,
+      memory_markdown: state.memory,
+      summary: "No durable change."
+    });
+    let releaseFirst: ((value: string) => void) | undefined;
+    const firstResult = new Promise<string>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const provider = {
+      curate: vi
+        .fn()
+        .mockImplementationOnce(() => firstResult)
+        .mockResolvedValue(result)
+    };
+    const mutex = new KeyedMutex();
+    const scheduler = new CurationScheduler(
+      db,
+      characters,
+      provider as never,
+      { archiveAndLockThread: vi.fn() },
+      pino({ enabled: false }),
+      1_000_000,
+      mutex
+    );
+    const tick = scheduler.tick();
+    while (provider.curate.mock.calls.length === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    let finishTurn: (() => void) | undefined;
+    const mayFinish = new Promise<void>((resolve) => {
+      finishTurn = resolve;
+    });
+    const liveTurn = mutex.runExclusive(session.thread_id, async () => {
+      db.appendMessage({
+        sessionId: session.id,
+        discordMessageId: "owner-during-curation",
+        role: "owner",
+        content: "Live question",
+        source: "text"
+      });
+      await mayFinish;
+      db.appendMessage({
+        sessionId: session.id,
+        discordMessageId: "assistant-during-curation",
+        role: "assistant",
+        content: "Live answer",
+        source: "text",
+        triggeringDiscordMessageId: "owner-during-curation"
+      });
+    });
+    while (
+      !db.raw
+        .prepare("SELECT 1 FROM messages WHERE discord_message_id = ?")
+        .get("owner-during-curation")
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    releaseFirst?.(result);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(provider.curate).toHaveBeenCalledTimes(1);
+    finishTurn?.();
+    await liveTurn;
+    await tick;
+    expect(provider.curate).toHaveBeenCalledTimes(2);
+    expect(provider.curate.mock.calls[1]?.[1]).toContain(
+      "OWNER: Live question"
+    );
+    expect(provider.curate.mock.calls[1]?.[1]).toContain(
+      "CHARACTER: Live answer"
+    );
+    db.close();
+  });
+
   it("waits for in-flight thread work before snapshotting /end", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "sky-curate-"));
     roots.push(root);

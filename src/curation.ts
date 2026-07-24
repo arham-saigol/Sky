@@ -141,7 +141,10 @@ export class CurationScheduler {
         state
       );
       const updated = this.db.completeCurationJob(job);
-      const next = this.db.createCurationJob(job.session_id, job.trigger);
+      const next = await this.sessions.runExclusive(
+        session.thread_id,
+        async () => this.db.createCurationJob(job.session_id, job.trigger)
+      );
       await this.characters.finalizeCuration(character, job);
       this.logger.info(
         {

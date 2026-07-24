@@ -539,8 +539,14 @@ export class SkyDatabase {
       .all(sessionId, fromExclusive, toInclusive) as MessageRow[];
   }
 
-  public claimEvent(eventId: string, eventType: string): boolean {
+  public claimEvent(
+    eventId: string,
+    eventType: string,
+    payload?: unknown
+  ): boolean {
     const timestamp = now();
+    const payloadJson =
+      payload === undefined ? null : JSON.stringify(payload);
     return this.raw.transaction(() => {
       const existing = this.raw
         .prepare("SELECT status, updated_at FROM discord_events WHERE event_id = ?")
@@ -555,18 +561,19 @@ export class SkyDatabase {
         this.raw
           .prepare(
             `UPDATE discord_events
-             SET status = 'processing', attempts = attempts + 1, updated_at = ?
+             SET status = 'processing', attempts = attempts + 1, updated_at = ?,
+                 payload_json = COALESCE(?, payload_json)
              WHERE event_id = ?`
           )
-          .run(timestamp, eventId);
+          .run(timestamp, payloadJson, eventId);
       } else {
         this.raw
           .prepare(
             `INSERT INTO discord_events
-             (event_id, event_type, status, first_seen_at, updated_at)
-             VALUES (?, ?, 'processing', ?, ?)`
+             (event_id, event_type, status, first_seen_at, updated_at, payload_json)
+             VALUES (?, ?, 'processing', ?, ?, ?)`
           )
-          .run(eventId, eventType, timestamp, timestamp);
+          .run(eventId, eventType, timestamp, timestamp, payloadJson);
       }
       return true;
     })();
@@ -575,7 +582,10 @@ export class SkyDatabase {
   public completeEvent(eventId: string): void {
     this.raw
       .prepare(
-        "UPDATE discord_events SET status = 'completed', updated_at = ?, last_error = NULL WHERE event_id = ?"
+        `UPDATE discord_events
+         SET status = 'completed', updated_at = ?, last_error = NULL,
+             payload_json = NULL
+         WHERE event_id = ?`
       )
       .run(now(), eventId);
   }
@@ -586,6 +596,27 @@ export class SkyDatabase {
         "UPDATE discord_events SET status = 'failed', updated_at = ?, last_error = ? WHERE event_id = ?"
       )
       .run(now(), safeError.slice(0, 500), eventId);
+  }
+
+  public incompleteEventPayloads<T>(eventType: string): T[] {
+    return (
+      this.raw
+        .prepare(
+          `SELECT payload_json FROM discord_events
+           WHERE event_type = ? AND status != 'completed'
+             AND payload_json IS NOT NULL
+           ORDER BY first_seen_at`
+        )
+        .all(eventType) as Array<{ payload_json: string }>
+    ).map((row) => JSON.parse(row.payload_json) as T);
+  }
+
+  public hasMessageWithDiscordId(discordMessageId: string): boolean {
+    return Boolean(
+      this.raw
+        .prepare("SELECT 1 FROM messages WHERE discord_message_id = ?")
+        .get(discordMessageId)
+    );
   }
 
   public beginOutbound(

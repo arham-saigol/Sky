@@ -72,7 +72,7 @@ describe("SQLite persistence and recovery", () => {
           .prepare("SELECT MAX(version) AS version FROM schema_migrations")
           .get() as { version: number }
       ).version
-    ).toBe(2);
+    ).toBe(3);
     const restored = reopened.getSessionByThread("thread-1");
     expect(restored).toMatchObject({
       character_id: character.id,
@@ -175,6 +175,20 @@ describe("SQLite persistence and recovery", () => {
     expect(db.claimEvent("event-1", "MESSAGE_CREATE")).toBe(false);
     db.completeEvent("event-1");
     expect(db.claimEvent("event-1", "MESSAGE_CREATE")).toBe(false);
+    const recoverable = {
+      eventId: "event-queued",
+      content: "Persist me before waiting"
+    };
+    expect(
+      db.claimEvent("event-queued", "MESSAGE_CREATE", recoverable)
+    ).toBe(true);
+    expect(
+      db.incompleteEventPayloads<typeof recoverable>("MESSAGE_CREATE")
+    ).toContainEqual(recoverable);
+    db.completeEvent("event-queued");
+    expect(
+      db.incompleteEventPayloads<typeof recoverable>("MESSAGE_CREATE")
+    ).toEqual([]);
     expect(
       db.appendMessage({
         sessionId: session.id,

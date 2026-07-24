@@ -7,6 +7,7 @@ import {
 } from "../src/discord/transport.js";
 import { parseExpression } from "../src/prompts.js";
 import { redact, redactUnknown } from "../src/redaction.js";
+import { resolveSecretPromptAnswer } from "../src/setup.js";
 
 describe("secret and reasoning hygiene", () => {
   it("redacts API keys, Discord tokens, authorization headers and reasoning", () => {
@@ -41,6 +42,14 @@ describe("secret and reasoning hygiene", () => {
     expect(
       parseExpression("[[SKY_EXPRESSION:calm]] Hello.", false)
     ).toEqual({ content: "Hello." });
+  });
+
+  it("can explicitly clear an optional saved secret", () => {
+    expect(resolveSecretPromptAnswer("", "existing", true)).toBe("existing");
+    expect(resolveSecretPromptAnswer("replacement", "existing", true)).toBe(
+      "replacement"
+    );
+    expect(resolveSecretPromptAnswer("CLEAR", "existing", true)).toBeUndefined();
   });
 });
 
