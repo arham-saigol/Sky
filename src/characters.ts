@@ -1,0 +1,418 @@
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, readFile, readdir, rmdir, unlink } from "node:fs/promises";
+import path from "node:path";
+import lockfile from "proper-lockfile";
+import type { VoiceName } from "./constants.js";
+import {
+  type CharacterRow,
+  type CurationJobRow,
+  SkyDatabase
+} from "./db.js";
+import { SkyError } from "./errors.js";
+import { atomicWriteText } from "./util/atomic-file.js";
+import { KeyedMutex } from "./util/mutex.js";
+
+export interface CharacterDefinition {
+  name: string;
+  identity: string;
+  personality: string;
+  appearance: string;
+  settingAndBoundaries: string;
+  memorySeed?: string;
+  voice: VoiceName;
+}
+
+interface CurationJournal {
+  version: 1;
+  jobId: string;
+  characterId: string;
+  soul: string;
+  memory: string;
+}
+
+const MAX_FILE_BYTES = 128 * 1024;
+
+function sha256(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+function slugify(name: string): string {
+  const slug = name
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("en-US")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 48);
+  return slug || `character-${randomUUID().slice(0, 8)}`;
+}
+
+function soulTemplate(definition: CharacterDefinition): string {
+  return `# ${definition.name}
+
+## Identity
+
+${definition.identity.trim()}
+
+This character and every roleplay participant are consenting fictional adults.
+
+## Personality
+
+${definition.personality.trim()}
+
+## Appearance
+
+${definition.appearance.trim()}
+
+## Setting and boundaries
+
+${definition.settingAndBoundaries.trim()}
+`;
+}
+
+function memoryTemplate(seed?: string): string {
+  const content = seed?.trim() || "No persistent memories yet.";
+  return `# Persistent memory
+
+${content}
+`;
+}
+
+function firstHeading(markdown: string): string | undefined {
+  return markdown
+    .split(/\r?\n/)
+    .find((line) => line.startsWith("# "))
+    ?.slice(2)
+    .trim();
+}
+
+export class CharacterFiles {
+  private readonly mutex = new KeyedMutex();
+
+  public constructor(
+    private readonly db: SkyDatabase,
+    private readonly charactersDir: string
+  ) {}
+
+  public async initialize(): Promise<void> {
+    await mkdir(this.charactersDir, { recursive: true });
+    await this.recoverJournals();
+    for (const character of this.db.listCharacters()) {
+      await this.reconcile(character);
+    }
+  }
+
+  public async create(
+    definition: CharacterDefinition
+  ): Promise<CharacterRow> {
+    const name = definition.name.trim();
+    if (name.length < 1 || name.length > 80) {
+      throw new SkyError(
+        "Character names must be between 1 and 80 characters",
+        "INVALID_CHARACTER"
+      );
+    }
+    if (
+      !definition.identity.trim() ||
+      !definition.personality.trim() ||
+      !definition.appearance.trim() ||
+      !definition.settingAndBoundaries.trim()
+    ) {
+      throw new SkyError(
+        "The complete character definition is required",
+        "INVALID_CHARACTER"
+      );
+    }
+    if (this.db.getCharacterByName(name)) {
+      throw new SkyError(
+        `A character named ${name} already exists`,
+        "CHARACTER_EXISTS"
+      );
+    }
+    let slug = slugify(name);
+    const existing = new Set(this.db.listCharacters().map((row) => row.slug));
+    if (existing.has(slug)) slug = `${slug}-${randomUUID().slice(0, 6)}`;
+    const directory = path.join(this.charactersDir, slug);
+    await mkdir(directory, { recursive: false });
+    const soul = soulTemplate({ ...definition, name });
+    const memory = memoryTemplate(definition.memorySeed);
+    const soulPath = path.join(directory, "SOUL.md");
+    const memoryPath = path.join(directory, "MEMORY.md");
+    await atomicWriteText(soulPath, soul);
+    await atomicWriteText(memoryPath, memory);
+    try {
+      const character = this.db.createCharacter({
+        name,
+        slug,
+        soulPath,
+        memoryPath,
+        voice: definition.voice
+      });
+      this.db.raw.transaction(() => {
+        this.db.recordRevision({
+          characterId: character.id,
+          kind: "SOUL",
+          sha256: sha256(soul),
+          content: soul,
+          source: "create"
+        });
+        this.db.recordRevision({
+          characterId: character.id,
+          kind: "MEMORY",
+          sha256: sha256(memory),
+          content: memory,
+          source: "create"
+        });
+      })();
+      return character;
+    } catch (error) {
+      await unlink(soulPath).catch(() => undefined);
+      await unlink(memoryPath).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  public async read(
+    character: CharacterRow
+  ): Promise<{ soul: string; memory: string }> {
+    await this.reconcile(character);
+    const [soul, memory] = await Promise.all([
+      readFile(character.soul_path, "utf8"),
+      readFile(character.memory_path, "utf8")
+    ]);
+    return { soul, memory };
+  }
+
+  public async reconcile(character: CharacterRow): Promise<void> {
+    await this.mutex.runExclusive(character.id, async () => {
+      const directory = path.dirname(character.soul_path);
+      await mkdir(directory, { recursive: true });
+      const release = await lockfile.lock(directory, {
+        realpath: false,
+        retries: { retries: 5, minTimeout: 25, maxTimeout: 250 },
+        stale: 30_000
+      });
+      try {
+        const files: Array<{
+          kind: "SOUL" | "MEMORY";
+          file: string;
+          fallback: string;
+        }> = [
+          {
+            kind: "SOUL",
+            file: character.soul_path,
+            fallback: `# ${character.name}\n\nThis character and every roleplay participant are consenting fictional adults.\n`
+          },
+          {
+            kind: "MEMORY",
+            file: character.memory_path,
+            fallback: memoryTemplate()
+          }
+        ];
+        for (const item of files) {
+          let content: string;
+          try {
+            content = await readFile(item.file, "utf8");
+          } catch {
+            const latest = this.db.latestRevision(character.id, item.kind);
+            content = latest?.content ?? item.fallback;
+            await atomicWriteText(item.file, content);
+          }
+          const latest = this.db.latestRevision(character.id, item.kind);
+          const digest = sha256(content);
+          if (!latest || latest.sha256 !== digest) {
+            this.validateMarkdown(item.kind, content, character.name);
+            this.db.recordRevision({
+              characterId: character.id,
+              kind: item.kind,
+              sha256: digest,
+              content,
+              source: "external"
+            });
+          }
+        }
+      } finally {
+        await release();
+      }
+    });
+  }
+
+  public async applyCuration(
+    character: CharacterRow,
+    job: CurationJobRow,
+    next: { soul: string; memory: string }
+  ): Promise<void> {
+    this.validateMarkdown("SOUL", next.soul, character.name);
+    this.validateMarkdown("MEMORY", next.memory, character.name);
+    await this.mutex.runExclusive(character.id, async () => {
+      const directory = path.dirname(character.soul_path);
+      const release = await lockfile.lock(directory, {
+        realpath: false,
+        retries: { retries: 10, minTimeout: 50, maxTimeout: 500 },
+        stale: 60_000
+      });
+      const journalPath = path.join(directory, `.curation-${job.id}.journal.json`);
+      try {
+        await this.reconcileWithoutLock(character);
+        const journal: CurationJournal = {
+          version: 1,
+          jobId: job.id,
+          characterId: character.id,
+          soul: next.soul,
+          memory: next.memory
+        };
+        await atomicWriteText(journalPath, JSON.stringify(journal));
+        await atomicWriteText(character.soul_path, next.soul);
+        await atomicWriteText(character.memory_path, next.memory);
+        this.db.raw.transaction(() => {
+          const latestSoul = this.db.latestRevision(character.id, "SOUL");
+          if (latestSoul?.sha256 !== sha256(next.soul)) {
+            this.db.recordRevision({
+              characterId: character.id,
+              kind: "SOUL",
+              sha256: sha256(next.soul),
+              content: next.soul,
+              source: "curator",
+              curationJobId: job.id
+            });
+          }
+          const latestMemory = this.db.latestRevision(character.id, "MEMORY");
+          if (latestMemory?.sha256 !== sha256(next.memory)) {
+            this.db.recordRevision({
+              characterId: character.id,
+              kind: "MEMORY",
+              sha256: sha256(next.memory),
+              content: next.memory,
+              source: "curator",
+              curationJobId: job.id
+            });
+          }
+        })();
+        await unlink(journalPath);
+      } finally {
+        await release();
+      }
+    });
+  }
+
+  public async deleteFiles(character: CharacterRow): Promise<void> {
+    await this.mutex.runExclusive(character.id, async () => {
+      const attachmentPaths = this.db.attachmentPathsForCharacter(character.id);
+      await Promise.all([
+        unlink(character.soul_path).catch(() => undefined),
+        unlink(character.memory_path).catch(() => undefined),
+        ...attachmentPaths.map((file) => unlink(file).catch(() => undefined))
+      ]);
+      this.db.permanentlyDeleteCharacter(character.id);
+      await rmdir(path.dirname(character.soul_path)).catch(() => undefined);
+    });
+  }
+
+  private validateMarkdown(
+    kind: "SOUL" | "MEMORY",
+    content: string,
+    characterName: string
+  ): void {
+    if (
+      !content.trim() ||
+      Buffer.byteLength(content, "utf8") > MAX_FILE_BYTES ||
+      content.includes("\0") ||
+      /<!--\s*SKY[-_:]/i.test(content)
+    ) {
+      throw new SkyError(
+        `${kind}.md mutation was empty, oversized, or contained unsafe control data`,
+        "UNSAFE_CURATION"
+      );
+    }
+    if (kind === "SOUL") {
+      if (firstHeading(content) !== characterName) {
+        throw new SkyError(
+          "The curator attempted to change the character's stable identity heading",
+          "UNSAFE_CURATION"
+        );
+      }
+      if (!/fictional adults?/i.test(content)) {
+        throw new SkyError(
+          "SOUL.md must preserve the fictional-adult invariant",
+          "UNSAFE_CURATION"
+        );
+      }
+    } else if (!/^#\s+/m.test(content)) {
+      throw new SkyError(
+        "MEMORY.md must remain structured Markdown",
+        "UNSAFE_CURATION"
+      );
+    }
+  }
+
+  private async reconcileWithoutLock(character: CharacterRow): Promise<void> {
+    for (const [kind, file] of [
+      ["SOUL", character.soul_path],
+      ["MEMORY", character.memory_path]
+    ] as const) {
+      const content = await readFile(file, "utf8");
+      this.validateMarkdown(kind, content, character.name);
+      const latest = this.db.latestRevision(character.id, kind);
+      const digest = sha256(content);
+      if (latest?.sha256 !== digest) {
+        this.db.recordRevision({
+          characterId: character.id,
+          kind,
+          sha256: digest,
+          content,
+          source: "external"
+        });
+      }
+    }
+  }
+
+  private async recoverJournals(): Promise<void> {
+    const directories = await readdir(this.charactersDir, {
+      withFileTypes: true
+    }).catch(() => []);
+    for (const directory of directories) {
+      if (!directory.isDirectory()) continue;
+      const location = path.join(this.charactersDir, directory.name);
+      const files = await readdir(location).catch(() => []);
+      for (const file of files.filter((name) =>
+        /^\.curation-.+\.journal\.json$/.test(name)
+      )) {
+        const journalPath = path.join(location, file);
+        try {
+          const journal = JSON.parse(
+            await readFile(journalPath, "utf8")
+          ) as CurationJournal;
+          const character = this.db.getCharacterById(journal.characterId);
+          if (!character || journal.version !== 1) continue;
+          this.validateMarkdown("SOUL", journal.soul, character.name);
+          this.validateMarkdown("MEMORY", journal.memory, character.name);
+          await atomicWriteText(character.soul_path, journal.soul);
+          await atomicWriteText(character.memory_path, journal.memory);
+          this.db.raw.transaction(() => {
+            for (const [kind, content] of [
+              ["SOUL", journal.soul],
+              ["MEMORY", journal.memory]
+            ] as const) {
+              if (
+                this.db.latestRevision(character.id, kind)?.sha256 !==
+                sha256(content)
+              ) {
+                this.db.recordRevision({
+                  characterId: character.id,
+                  kind,
+                  sha256: sha256(content),
+                  content,
+                  source: "curator",
+                  curationJobId: journal.jobId
+                });
+              }
+            }
+          })();
+          await unlink(journalPath);
+        } catch {
+          // Keep malformed journals for doctor/manual recovery.
+        }
+      }
+    }
+  }
+}
