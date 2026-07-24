@@ -304,6 +304,7 @@ describe("character Markdown durability", () => {
       lobbyChannelId: "lobby"
     });
     db.markSessionEnded(session.id);
+    db.markArchived(session.id);
     const journalPath = path.join(
       path.dirname(character.soul_path),
       ".curation-orphan.journal.json"
@@ -322,6 +323,25 @@ describe("character Markdown durability", () => {
     await expect(access(character.memory_path)).rejects.toThrow();
     await expect(access(journalPath)).rejects.toThrow();
     await expect(access(path.dirname(character.soul_path))).rejects.toThrow();
+    db.close();
+  });
+
+  it("retains ended sessions and files until Discord archival succeeds", async () => {
+    const { db, files, character } = await fixture();
+    const session = db.createSession({
+      characterId: character.id,
+      threadId: "thread-awaiting-archive",
+      guildId: "guild",
+      lobbyChannelId: "lobby"
+    });
+    db.markSessionEnded(session.id);
+    await expect(files.deleteFiles(character)).rejects.toThrow(
+      /ended and archived/i
+    );
+    await expect(access(character.soul_path)).resolves.toBeUndefined();
+    await expect(access(character.memory_path)).resolves.toBeUndefined();
+    expect(db.getSession(session.id)?.archived_at).toBeNull();
+    expect(db.getCharacterById(character.id)).toBeDefined();
     db.close();
   });
 

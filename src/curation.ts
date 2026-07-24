@@ -41,7 +41,6 @@ export class CurationScheduler {
 
   public start(): void {
     if (this.timer) return;
-    this.db.recoverInterruptedWork();
     this.timer = setInterval(() => {
       void this.tick();
     }, this.intervalMs);

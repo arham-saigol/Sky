@@ -359,6 +359,11 @@ export class CharacterFiles {
 
   public async deleteFiles(character: CharacterRow): Promise<void> {
     await this.mutex.runExclusive(character.id, async () => {
+      if (this.db.sessionCountBlockingCharacterDeletion(character.id) > 0) {
+        throw new Error(
+          "Cannot delete a character until every session is ended and archived"
+        );
+      }
       const directory = path.dirname(character.soul_path);
       const attachmentPaths = this.db.attachmentPathsForCharacter(character.id);
       const journals = (await readdir(directory).catch(

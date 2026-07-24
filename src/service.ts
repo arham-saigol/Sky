@@ -187,8 +187,9 @@ async function main(): Promise<void> {
     startedAt
   });
   await transport.start(secrets.discordBotToken);
-  curation.start();
+  db.recoverInterruptedWork();
   await roleplay.recoverIncomplete();
+  curation.start();
   db.setServiceState("runtime", {
     state: "running",
     pid: process.pid,

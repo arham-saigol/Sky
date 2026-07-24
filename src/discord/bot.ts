@@ -374,10 +374,10 @@ export class SkyDiscordBot {
       });
       return;
     }
-    if (this.db.activeSessionCountForCharacter(character.id) > 0) {
+    if (this.db.sessionCountBlockingCharacterDeletion(character.id) > 0) {
       await interaction.reply({
         content:
-          "End every active session for this character before permanently deleting it.",
+          "End and archive every session for this character before permanently deleting it.",
         flags: MessageFlags.Ephemeral
       });
       return;
@@ -402,18 +402,22 @@ export class SkyDiscordBot {
       return;
     }
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-    const thread = await this.transport.createSessionThread(character.name);
-    this.db.createSession({
-      characterId: character.id,
-      threadId: thread.id,
-      guildId: this.config.discordGuildId,
-      lobbyChannelId: this.config.discordLobbyChannelId
-    });
-    await thread.send({
-      content: `You are now speaking with **${character.name}**. Talk normally; no mention is needed. Use \`/end\` when you want to close and curate the session.`,
-      allowedMentions: { parse: [] }
-    });
-    await interaction.editReply(`Started <#${thread.id}>.`);
+    let session = this.db.getEventResultSession(interaction.id);
+    if (!session) {
+      const thread = await this.transport.createSessionThread(character.name);
+      session = this.db.createSessionForEvent(interaction.id, {
+        characterId: character.id,
+        threadId: thread.id,
+        guildId: this.config.discordGuildId,
+        lobbyChannelId: this.config.discordLobbyChannelId
+      });
+    }
+    await this.transport.sendText(
+      session.thread_id,
+      `You are now speaking with **${character.name}**. Talk normally; no mention is needed. Use \`/end\` when you want to close and curate the session.`,
+      `start-${interaction.id}`
+    );
+    await interaction.editReply(`Started <#${session.thread_id}>.`);
   }
 
   private async handleReasoning(

@@ -72,7 +72,7 @@ describe("SQLite persistence and recovery", () => {
           .prepare("SELECT MAX(version) AS version FROM schema_migrations")
           .get() as { version: number }
       ).version
-    ).toBe(1);
+    ).toBe(2);
     const restored = reopened.getSessionByThread("thread-1");
     expect(restored).toMatchObject({
       character_id: character.id,
@@ -90,6 +90,41 @@ describe("SQLite persistence and recovery", () => {
       .get(job!.id) as { state: string };
     expect(recovered.state).toBe("failed");
     reopened.close();
+  });
+
+  it("persists one session result for a retried interaction", async () => {
+    const { db, root } = await database();
+    const character = db.createCharacter({
+      name: "Idempotent",
+      slug: "idempotent",
+      soulPath: path.join(root, "SOUL.md"),
+      memoryPath: path.join(root, "MEMORY.md"),
+      voice: "Katie"
+    });
+    expect(db.claimEvent("start-interaction", "INTERACTION_2")).toBe(true);
+    const first = db.createSessionForEvent("start-interaction", {
+      characterId: character.id,
+      threadId: "thread-first",
+      guildId: "guild",
+      lobbyChannelId: "lobby"
+    });
+    const retried = db.createSessionForEvent("start-interaction", {
+      characterId: character.id,
+      threadId: "thread-duplicate",
+      guildId: "guild",
+      lobbyChannelId: "lobby"
+    });
+    expect(retried.id).toBe(first.id);
+    expect(retried.thread_id).toBe("thread-first");
+    expect(db.getEventResultSession("start-interaction")?.id).toBe(first.id);
+    expect(
+      (
+        db.raw.prepare("SELECT COUNT(*) AS count FROM sessions").get() as {
+          count: number;
+        }
+      ).count
+    ).toBe(1);
+    db.close();
   });
 
   it("deduplicates Discord events, messages and outbound work", async () => {

@@ -218,8 +218,10 @@ export class SkyDatabase {
   }
 
   public permanentlyDeleteCharacter(id: string): void {
-    if (this.activeSessionCountForCharacter(id) > 0) {
-      throw new Error("Cannot delete a character with active sessions");
+    if (this.sessionCountBlockingCharacterDeletion(id) > 0) {
+      throw new Error(
+        "Cannot delete a character until every session is ended and archived"
+      );
     }
     this.raw.transaction(() => {
       this.raw
@@ -279,10 +281,11 @@ export class SkyDatabase {
       .run(voice, now(), id);
   }
 
-  public activeSessionCountForCharacter(id: string): number {
+  public sessionCountBlockingCharacterDeletion(id: string): number {
     const row = this.raw
       .prepare(
-        "SELECT COUNT(*) AS count FROM sessions WHERE character_id = ? AND state != 'ended'"
+        `SELECT COUNT(*) AS count FROM sessions
+         WHERE character_id = ? AND (state != 'ended' OR archived_at IS NULL)`
       )
       .get(id) as { count: number };
     return row.count;
@@ -320,6 +323,36 @@ export class SkyDatabase {
         );
     })();
     return this.getSession(id)!;
+  }
+
+  public createSessionForEvent(
+    eventId: string,
+    input: NewSession
+  ): SessionRow {
+    return this.raw.transaction(() => {
+      const existing = this.getEventResultSession(eventId);
+      if (existing) return existing;
+      const session = this.createSession(input);
+      const result = this.raw
+        .prepare(
+          "UPDATE discord_events SET result_session_id = ?, updated_at = ? WHERE event_id = ?"
+        )
+        .run(session.id, now(), eventId);
+      if (result.changes !== 1) {
+        throw new Error("Interaction event was not persisted before session creation");
+      }
+      return session;
+    })();
+  }
+
+  public getEventResultSession(eventId: string): SessionRow | undefined {
+    return this.raw
+      .prepare(
+        `SELECT sessions.* FROM discord_events
+         JOIN sessions ON sessions.id = discord_events.result_session_id
+         WHERE discord_events.event_id = ?`
+      )
+      .get(eventId) as SessionRow | undefined;
   }
 
   public getSession(id: string): SessionRow | undefined {
