@@ -405,12 +405,24 @@ export class SkyDiscordBot {
     let session = this.db.getEventResultSession(interaction.id);
     if (!session) {
       const thread = await this.transport.createSessionThread(character.name);
-      session = this.db.createSessionForEvent(interaction.id, {
-        characterId: character.id,
-        threadId: thread.id,
-        guildId: this.config.discordGuildId,
-        lobbyChannelId: this.config.discordLobbyChannelId
-      });
+      try {
+        session = this.db.createSessionForEvent(interaction.id, {
+          characterId: character.id,
+          threadId: thread.id,
+          guildId: this.config.discordGuildId,
+          lobbyChannelId: this.config.discordLobbyChannelId
+        });
+      } catch (error) {
+        try {
+          await thread.delete("Sky session persistence failed");
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            "Session persistence failed and the Discord thread could not be removed"
+          );
+        }
+        throw error;
+      }
     }
     await this.transport.sendText(
       session.thread_id,

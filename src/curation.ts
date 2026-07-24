@@ -68,9 +68,7 @@ export class CurationScheduler {
       if (current.state === "ended") {
         return { alreadyEnded: true, queued: false };
       }
-      this.db.beginEndSession(sessionId);
-      this.db.expediteCurationForEnd(sessionId);
-      const job = this.db.createCurationJob(sessionId, "end");
+      const { job } = this.db.beginEndSessionWithCuration(sessionId);
       if (!job) {
         if (this.db.pendingCurationCountForSession(sessionId) > 0) {
           void this.tick();

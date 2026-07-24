@@ -283,7 +283,7 @@ export async function runSetup(home: string): Promise<void> {
     }
     if (!isSupportedLobbyType(guild.lobbyType)) {
       throw new SkyError(
-        "Discord lobby must be a text or forum channel",
+        "Discord lobby must be a text channel so sessions use private threads",
         "DISCORD_CONFIGURATION"
       );
     }
@@ -293,9 +293,7 @@ export async function runSetup(home: string): Promise<void> {
         "DISCORD_CONFIGURATION"
       );
     }
-    const missingPermissions = requiredLobbyPermissions(
-      guild.lobbyType
-    ).filter(
+    const missingPermissions = requiredLobbyPermissions().filter(
       (permission) => !guild.permissions.includes(permission as never)
     );
     if (missingPermissions.length > 0) {

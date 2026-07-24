@@ -421,6 +421,18 @@ export class SkyDatabase {
     return this.getSession(id)!;
   }
 
+  public beginEndSessionWithCuration(id: string): {
+    session: SessionRow;
+    job: CurationJobRow | undefined;
+  } {
+    return this.raw.transaction(() => {
+      const session = this.beginEndSession(id);
+      this.expediteCurationForEnd(id);
+      const job = this.createCurationJob(id, "end");
+      return { session, job };
+    })();
+  }
+
   public markSessionEnded(id: string): void {
     const timestamp = now();
     this.raw

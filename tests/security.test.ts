@@ -56,20 +56,10 @@ describe("secret and reasoning hygiene", () => {
 describe("Discord lobby permissions", () => {
   it("requires the thread permission matching the lobby type", () => {
     expect(isSupportedLobbyType(ChannelType.GuildText)).toBe(true);
-    expect(isSupportedLobbyType(ChannelType.GuildForum)).toBe(true);
+    expect(isSupportedLobbyType(ChannelType.GuildForum)).toBe(false);
     expect(isSupportedLobbyType(ChannelType.GuildAnnouncement)).toBe(false);
-    expect(requiredLobbyPermissions(ChannelType.GuildForum)).toContain(
-      "CreatePublicThreads"
-    );
-    expect(requiredLobbyPermissions(ChannelType.GuildForum)).not.toContain(
-      "CreatePrivateThreads"
-    );
-    expect(requiredLobbyPermissions(ChannelType.GuildText)).toContain(
-      "CreatePrivateThreads"
-    );
-    expect(requiredLobbyPermissions(ChannelType.GuildText)).toContain(
-      "SendVoiceMessages"
-    );
+    expect(requiredLobbyPermissions()).toContain("CreatePrivateThreads");
+    expect(requiredLobbyPermissions()).toContain("SendVoiceMessages");
   });
 
   it("paginates character listings within Discord's message limit", () => {

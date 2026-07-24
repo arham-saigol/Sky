@@ -16,20 +16,15 @@ import type { SkySecrets } from "../config.js";
 import { GUILD_COMMANDS } from "./commands.js";
 
 export function isSupportedLobbyType(lobbyType?: number): boolean {
-  return (
-    lobbyType === ChannelType.GuildText ||
-    lobbyType === ChannelType.GuildForum
-  );
+  return lobbyType === ChannelType.GuildText;
 }
 
-export function requiredLobbyPermissions(lobbyType?: number): string[] {
+export function requiredLobbyPermissions(): string[] {
   return [
     "ViewChannel",
     "SendMessages",
     "SendMessagesInThreads",
-    lobbyType === ChannelType.GuildForum
-      ? "CreatePublicThreads"
-      : "CreatePrivateThreads",
+    "CreatePrivateThreads",
     "ManageThreads",
     "AttachFiles",
     "SendVoiceMessages",
@@ -148,19 +143,9 @@ export class DiscordTransport {
         reason: `Sky session for ${characterName}`
       });
       await thread.members.add(this.config.discordOwnerUserId);
-    } else if (channel?.type === ChannelType.GuildForum) {
-      thread = await channel.threads.create({
-        name,
-        autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
-        message: {
-          content: `Session started with **${characterName}**.`,
-          allowedMentions: { parse: [] }
-        },
-        reason: `Sky session for ${characterName}`
-      });
     } else {
       throw new Error(
-        "The configured lobby must be a Discord text or forum channel"
+        "The configured lobby must be a Discord text channel so sessions stay private"
       );
     }
     return thread;

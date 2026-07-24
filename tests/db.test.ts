@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   MAX_CURATION_MESSAGES,
   MAX_CURATION_TRANSCRIPT_BYTES,
@@ -263,6 +263,43 @@ describe("SQLite persistence and recovery", () => {
         }
       ).count
     ).toBe(1);
+    db.close();
+  });
+
+  it("rolls back the end transition when its curation job cannot be queued", async () => {
+    const { db, root } = await database();
+    const character = db.createCharacter({
+      name: "Atomic",
+      slug: "atomic",
+      soulPath: path.join(root, "SOUL.md"),
+      memoryPath: path.join(root, "MEMORY.md"),
+      voice: "Katie"
+    });
+    const session = db.createSession({
+      characterId: character.id,
+      threadId: "thread-atomic",
+      guildId: "guild",
+      lobbyChannelId: "lobby"
+    });
+    db.appendMessage({
+      sessionId: session.id,
+      discordMessageId: "atomic-1",
+      role: "owner",
+      content: "Keep the session active if queuing fails.",
+      source: "text"
+    });
+    vi.spyOn(db, "createCurationJob").mockImplementation(() => {
+      throw new Error("queue unavailable");
+    });
+
+    expect(() => db.beginEndSessionWithCuration(session.id)).toThrow(
+      "queue unavailable"
+    );
+    expect(db.getSession(session.id)).toMatchObject({
+      state: "active",
+      accepting_messages: 1
+    });
+    expect(db.pendingCurationCountForSession(session.id)).toBe(0);
     db.close();
   });
 

@@ -21,6 +21,7 @@ import { SkyDatabase } from "./db.js";
 import { GUILD_COMMANDS } from "./discord/commands.js";
 import {
   DiscordTransport,
+  isSupportedLobbyType,
   requiredLobbyPermissions
 } from "./discord/transport.js";
 import { safeErrorMessage } from "./errors.js";
@@ -338,9 +339,16 @@ export async function runDoctor(options: {
     );
     await discord.start(secrets.discordBotToken);
     const guildState = await discord.verifyGuild();
-    const requiredPermissions = requiredLobbyPermissions(
-      guildState.lobbyType
+    const lobbySupported = isSupportedLobbyType(guildState.lobbyType);
+    push(
+      checks,
+      "Discord lobby privacy",
+      lobbySupported,
+      lobbySupported
+        ? "Text lobby supports owner-only private session threads"
+        : "Lobby must be a text channel; forum posts can expose transcripts"
     );
+    const requiredPermissions = requiredLobbyPermissions();
     const missing = requiredPermissions.filter(
       (permission) => !guildState.permissions.includes(permission as never)
     );
