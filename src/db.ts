@@ -218,12 +218,12 @@ export class SkyDatabase {
   }
 
   public permanentlyDeleteCharacter(id: string): void {
-    if (this.sessionCountBlockingCharacterDeletion(id) > 0) {
-      throw new Error(
-        "Cannot delete a character until every session is ended and archived"
-      );
-    }
     this.raw.transaction(() => {
+      if (this.sessionCountBlockingCharacterDeletion(id) > 0) {
+        throw new Error(
+          "Cannot delete a character until every session is ended and archived"
+        );
+      }
       this.raw
         .prepare(
           `DELETE FROM attachments WHERE session_id IN (
