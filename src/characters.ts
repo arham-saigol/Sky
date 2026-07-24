@@ -151,6 +151,8 @@ export class CharacterFiles {
     const directory = path.join(this.charactersDir, slug);
     const soul = soulTemplate({ ...definition, name });
     const memory = memoryTemplate(definition.memorySeed);
+    this.validateMarkdown("SOUL", soul, name);
+    this.validateMarkdown("MEMORY", memory, name);
     const soulPath = path.join(directory, "SOUL.md");
     const memoryPath = path.join(directory, "MEMORY.md");
     let directoryCreated = false;
@@ -515,6 +517,7 @@ export class CharacterFiles {
             }
           })();
           this.db.completeCurationJob(job);
+          this.db.createCurationJob(job.session_id, job.trigger);
           await unlink(journalPath);
         } catch {
           // Keep malformed journals for doctor/manual recovery.
