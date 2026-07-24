@@ -19,7 +19,10 @@ import {
 import { MODEL_IDS } from "./constants.js";
 import { SkyDatabase } from "./db.js";
 import { GUILD_COMMANDS } from "./discord/commands.js";
-import { DiscordTransport } from "./discord/transport.js";
+import {
+  DiscordTransport,
+  requiredLobbyPermissions
+} from "./discord/transport.js";
 import { safeErrorMessage } from "./errors.js";
 import { createLogger } from "./logger.js";
 import { CartesiaTts } from "./providers/cartesia.js";
@@ -321,6 +324,22 @@ export async function runDoctor(options: {
         ? `${commands.length} guild commands registered`
         : "Guild commands differ; rerun `sky setup`"
     );
+    await discord.start(secrets.discordBotToken);
+    const guildState = await discord.verifyGuild();
+    const requiredPermissions = requiredLobbyPermissions(
+      guildState.lobbyType
+    );
+    const missing = requiredPermissions.filter(
+      (permission) => !guildState.permissions.includes(permission as never)
+    );
+    push(
+      checks,
+      "Discord permissions",
+      missing.length === 0,
+      missing.length
+        ? `Missing in lobby: ${missing.join(", ")}`
+        : "Required lobby/thread permissions are present"
+    );
     if (serviceStatus === "running") {
       const runtime = db?.getServiceState<{
         gateway?: { connected?: boolean; ping?: number };
@@ -338,28 +357,6 @@ export async function runDoctor(options: {
           : "Service Gateway heartbeat is absent or stale"
       );
     } else {
-      await discord.start(secrets.discordBotToken);
-      const guildState = await discord.verifyGuild();
-      const requiredPermissions = [
-        "ViewChannel",
-        "SendMessages",
-        "SendMessagesInThreads",
-        "CreatePrivateThreads",
-        "ManageThreads",
-        "AttachFiles",
-        "ReadMessageHistory"
-      ];
-      const missing = requiredPermissions.filter(
-        (permission) => !guildState.permissions.includes(permission as never)
-      );
-      push(
-        checks,
-        "Discord permissions",
-        missing.length === 0,
-        missing.length
-          ? `Missing in lobby: ${missing.join(", ")}`
-          : "Required lobby/thread permissions are present"
-      );
       push(
         checks,
         "Discord Gateway",
@@ -368,8 +365,8 @@ export async function runDoctor(options: {
           ? "Gateway connection succeeded"
           : "Gateway did not become ready"
       );
-      await discord.stop();
     }
+    await discord.stop();
   } catch (error) {
     push(checks, "Discord connectivity", false, safeErrorMessage(error));
     await discord.stop().catch(() => undefined);

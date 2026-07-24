@@ -15,6 +15,20 @@ import type { SkyConfig } from "../config.js";
 import type { SkySecrets } from "../config.js";
 import { GUILD_COMMANDS } from "./commands.js";
 
+export function requiredLobbyPermissions(lobbyType?: number): string[] {
+  return [
+    "ViewChannel",
+    "SendMessages",
+    "SendMessagesInThreads",
+    lobbyType === ChannelType.GuildForum
+      ? "CreatePublicThreads"
+      : "CreatePrivateThreads",
+    "ManageThreads",
+    "AttachFiles",
+    "ReadMessageHistory"
+  ];
+}
+
 export class DiscordTransport {
   public readonly client: Client;
   public readonly rest: REST;
@@ -210,6 +224,7 @@ export class DiscordTransport {
     owner: boolean;
     lobby: boolean;
     lobbyNsfw: boolean;
+    lobbyType?: number;
     permissions: string[];
   }> {
     const guild = await this.client.guilds.fetch(this.config.discordGuildId);
@@ -223,6 +238,7 @@ export class DiscordTransport {
       lobby: Boolean(lobby),
       lobbyNsfw:
         Boolean(lobby && "nsfw" in lobby && (lobby as { nsfw?: boolean }).nsfw),
+      ...(lobby ? { lobbyType: lobby.type } : {}),
       permissions: permissions?.toArray() ?? []
     };
   }

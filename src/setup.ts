@@ -17,7 +17,10 @@ import {
 } from "./config.js";
 import { MODEL_IDS, VOICE_NAMES, type VoiceName } from "./constants.js";
 import { GUILD_COMMANDS } from "./discord/commands.js";
-import { DiscordTransport } from "./discord/transport.js";
+import {
+  DiscordTransport,
+  requiredLobbyPermissions
+} from "./discord/transport.js";
 import { SkyError } from "./errors.js";
 import { createLogger } from "./logger.js";
 import { CartesiaTts } from "./providers/cartesia.js";
@@ -253,6 +256,17 @@ export async function runSetup(home: string): Promise<void> {
       throw new SkyError(
         "Discord guild, owner, or lobby could not be resolved",
         "DISCORD_CONFIGURATION"
+      );
+    }
+    const missingPermissions = requiredLobbyPermissions(
+      guild.lobbyType
+    ).filter(
+      (permission) => !guild.permissions.includes(permission as never)
+    );
+    if (missingPermissions.length > 0) {
+      throw new SkyError(
+        `Discord lobby is missing permissions: ${missingPermissions.join(", ")}`,
+        "DISCORD_PERMISSIONS"
       );
     }
     const commandCount = await discord.registerGuildCommands();

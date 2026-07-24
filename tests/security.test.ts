@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { ChannelType } from "discord.js";
+import { requiredLobbyPermissions } from "../src/discord/transport.js";
 import { parseExpression } from "../src/prompts.js";
 import { redact, redactUnknown } from "../src/redaction.js";
 
@@ -35,5 +37,19 @@ describe("secret and reasoning hygiene", () => {
     expect(
       parseExpression("[[SKY_EXPRESSION:calm]] Hello.", false)
     ).toEqual({ content: "Hello." });
+  });
+});
+
+describe("Discord lobby permissions", () => {
+  it("requires the thread permission matching the lobby type", () => {
+    expect(requiredLobbyPermissions(ChannelType.GuildForum)).toContain(
+      "CreatePublicThreads"
+    );
+    expect(requiredLobbyPermissions(ChannelType.GuildForum)).not.toContain(
+      "CreatePrivateThreads"
+    );
+    expect(requiredLobbyPermissions(ChannelType.GuildText)).toContain(
+      "CreatePrivateThreads"
+    );
   });
 });
