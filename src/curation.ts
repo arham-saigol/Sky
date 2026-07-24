@@ -1,6 +1,9 @@
 import { z } from "zod";
 import type { Logger } from "pino";
-import { CharacterFiles } from "./characters.js";
+import {
+  CharacterFiles,
+  MAX_CHARACTER_FILE_BYTES
+} from "./characters.js";
 import { SkyDatabase, type CurationJobRow } from "./db.js";
 import { safeErrorMessage } from "./errors.js";
 import type { OpenCodeProvider } from "./providers/opencode.js";
@@ -12,8 +15,8 @@ import { KeyedMutex } from "./util/mutex.js";
 
 const CuratorResponseSchema = z
   .object({
-    soul_markdown: z.string().min(1).max(128 * 1024),
-    memory_markdown: z.string().min(1).max(128 * 1024),
+    soul_markdown: z.string().min(1).max(MAX_CHARACTER_FILE_BYTES),
+    memory_markdown: z.string().min(1).max(MAX_CHARACTER_FILE_BYTES),
     summary: z.string().min(1).max(1_000)
   })
   .strict();

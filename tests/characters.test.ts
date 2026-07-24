@@ -87,6 +87,9 @@ describe("character Markdown durability", () => {
         }
       ).count
     ).toBe(0);
+    await expect(
+      access(path.join(root, "characters", "rollback"))
+    ).rejects.toThrow();
     db.close();
   });
 
@@ -192,6 +195,52 @@ describe("character Markdown durability", () => {
     ).toBe(false);
     reopened.recoverInterruptedWork();
     expect(reopened.getCurationJob(job.id)?.state).toBe("succeeded");
+    reopened.close();
+  });
+
+  it("preserves offline edits that conflict with curation journal recovery", async () => {
+    const { root, db, files, character } = await fixture();
+    const session = db.createSession({
+      characterId: character.id,
+      threadId: "thread-offline-edit",
+      guildId: "guild",
+      lobbyChannelId: "lobby"
+    });
+    db.appendMessage({
+      sessionId: session.id,
+      discordMessageId: "message-offline-edit",
+      role: "owner",
+      content: "Remember the harbor.",
+      source: "text"
+    });
+    const job = db.createCurationJob(session.id, "inactivity")!;
+    const claimed = db.claimDueCurationJob("2030-01-01T00:00:00.000Z")!;
+    const soul = (await files.read(character)).soul;
+    await files.applyCuration(character, claimed, {
+      soul,
+      memory: "# Persistent memory\n\n- Curated harbor memory.\n"
+    });
+    const offlineEdit =
+      "# Persistent memory\n\n- Human-authored offline correction.\n";
+    await writeFile(character.memory_path, offlineEdit);
+    const databasePath = db.raw.name;
+    db.close();
+
+    const reopened = new SkyDatabase(databasePath);
+    dbs.push(reopened);
+    const recoveredFiles = new CharacterFiles(
+      reopened,
+      path.join(root, "characters")
+    );
+    await recoveredFiles.initialize();
+    expect(await readFile(character.memory_path, "utf8")).toBe(offlineEdit);
+    expect(reopened.getCurationJob(job.id)?.state).toBe("running");
+    reopened.recoverInterruptedWork();
+    expect(reopened.getCurationJob(job.id)?.state).toBe("failed");
+    expect(reopened.latestRevision(character.id, "MEMORY")).toMatchObject({
+      source: "external",
+      content: offlineEdit
+    });
     reopened.close();
   });
 

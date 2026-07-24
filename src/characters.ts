@@ -23,14 +23,16 @@ export interface CharacterDefinition {
 }
 
 interface CurationJournal {
-  version: 1;
+  version: 2;
   jobId: string;
   characterId: string;
+  baseSoulSha256: string;
+  baseMemorySha256: string;
   soul: string;
   memory: string;
 }
 
-const MAX_FILE_BYTES = 128 * 1024;
+export const MAX_CHARACTER_FILE_BYTES = 8 * 1024;
 
 function sha256(content: string): string {
   return createHash("sha256").update(content).digest("hex");
@@ -38,6 +40,12 @@ function sha256(content: string): string {
 
 async function unlinkIfPresent(file: string): Promise<void> {
   await unlink(file).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT") throw error;
+  });
+}
+
+async function rmdirIfPresent(directory: string): Promise<void> {
+  await rmdir(directory).catch((error: NodeJS.ErrnoException) => {
     if (error.code !== "ENOENT") throw error;
   });
 }
@@ -139,14 +147,16 @@ export class CharacterFiles {
     const existing = new Set(this.db.listCharacters().map((row) => row.slug));
     if (existing.has(slug)) slug = `${slug}-${randomUUID().slice(0, 6)}`;
     const directory = path.join(this.charactersDir, slug);
-    await mkdir(directory, { recursive: false });
     const soul = soulTemplate({ ...definition, name });
     const memory = memoryTemplate(definition.memorySeed);
     const soulPath = path.join(directory, "SOUL.md");
     const memoryPath = path.join(directory, "MEMORY.md");
-    await atomicWriteText(soulPath, soul);
-    await atomicWriteText(memoryPath, memory);
+    let directoryCreated = false;
     try {
+      await mkdir(directory, { recursive: false });
+      directoryCreated = true;
+      await atomicWriteText(soulPath, soul);
+      await atomicWriteText(memoryPath, memory);
       const character = this.db.raw.transaction(() => {
         const created = this.db.createCharacter({
           name,
@@ -173,8 +183,20 @@ export class CharacterFiles {
       })();
       return character;
     } catch (error) {
-      await unlink(soulPath).catch(() => undefined);
-      await unlink(memoryPath).catch(() => undefined);
+      if (directoryCreated) {
+        try {
+          await Promise.all([
+            unlinkIfPresent(soulPath),
+            unlinkIfPresent(memoryPath)
+          ]);
+          await rmdirIfPresent(directory);
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            "Character creation failed and cleanup was incomplete"
+          );
+        }
+      }
       throw error;
     }
   }
@@ -262,11 +284,11 @@ export class CharacterFiles {
       const journalPath = path.join(directory, `.curation-${job.id}.journal.json`);
       try {
         await this.reconcileWithoutLock(character);
+        const [currentSoul, currentMemory] = await Promise.all([
+          readFile(character.soul_path, "utf8"),
+          readFile(character.memory_path, "utf8")
+        ]);
         if (expected) {
-          const [currentSoul, currentMemory] = await Promise.all([
-            readFile(character.soul_path, "utf8"),
-            readFile(character.memory_path, "utf8")
-          ]);
           if (
             sha256(currentSoul) !== sha256(expected.soul) ||
             sha256(currentMemory) !== sha256(expected.memory)
@@ -279,9 +301,11 @@ export class CharacterFiles {
           }
         }
         const journal: CurationJournal = {
-          version: 1,
+          version: 2,
           jobId: job.id,
           characterId: character.id,
+          baseSoulSha256: sha256(currentSoul),
+          baseMemorySha256: sha256(currentMemory),
           soul: next.soul,
           memory: next.memory
         };
@@ -351,7 +375,7 @@ export class CharacterFiles {
   ): void {
     if (
       !content.trim() ||
-      Buffer.byteLength(content, "utf8") > MAX_FILE_BYTES ||
+      Buffer.byteLength(content, "utf8") > MAX_CHARACTER_FILE_BYTES ||
       content.includes("\0") ||
       /<!--\s*SKY[-_:]/i.test(content)
     ) {
@@ -424,12 +448,29 @@ export class CharacterFiles {
             !character ||
             !job ||
             job.character_id !== character.id ||
-            journal.version !== 1
+            journal.version !== 2
           ) {
             continue;
           }
           this.validateMarkdown("SOUL", journal.soul, character.name);
           this.validateMarkdown("MEMORY", journal.memory, character.name);
+          const [currentSoul, currentMemory] = await Promise.all([
+            readFile(character.soul_path, "utf8"),
+            readFile(character.memory_path, "utf8")
+          ]);
+          const soulDigest = sha256(currentSoul);
+          const memoryDigest = sha256(currentMemory);
+          if (
+            ![journal.baseSoulSha256, sha256(journal.soul)].includes(
+              soulDigest
+            ) ||
+            ![journal.baseMemorySha256, sha256(journal.memory)].includes(
+              memoryDigest
+            )
+          ) {
+            await this.reconcileWithoutLock(character);
+            continue;
+          }
           await atomicWriteText(character.soul_path, journal.soul);
           await atomicWriteText(character.memory_path, journal.memory);
           this.db.raw.transaction(() => {
