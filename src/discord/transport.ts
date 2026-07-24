@@ -142,7 +142,19 @@ export class DiscordTransport {
         autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
         reason: `Sky session for ${characterName}`
       });
-      await thread.members.add(this.config.discordOwnerUserId);
+      try {
+        await thread.members.add(this.config.discordOwnerUserId);
+      } catch (error) {
+        try {
+          await thread.delete("Sky could not add the session owner");
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            "Adding the session owner failed and the Discord thread could not be removed"
+          );
+        }
+        throw error;
+      }
     } else {
       throw new Error(
         "The configured lobby must be a Discord text channel so sessions stay private"

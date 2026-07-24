@@ -149,6 +149,7 @@ async function main(): Promise<void> {
       signal
     });
     await transport.stop();
+    await bot.stop();
     await Promise.all([roleplay.stop(), curation.stop()]);
     db.setServiceState("runtime", {
       state: "stopped",

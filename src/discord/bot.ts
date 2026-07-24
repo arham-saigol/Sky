@@ -51,6 +51,7 @@ export function paginateCharacterLines(
 
 export class SkyDiscordBot {
   private readonly pendingCharacterNames = new Map<string, string>();
+  private readonly activeInteractions = new Set<Promise<void>>();
 
   public constructor(
     private readonly config: SkyConfig,
@@ -111,8 +112,26 @@ export class SkyDiscordBot {
       ) {
         return;
       }
-      void this.handleInteraction(interaction);
+      const task = this.handleInteraction(interaction);
+      this.activeInteractions.add(task);
+      void task
+        .catch((error: unknown) => {
+          this.logger.warn(
+            {
+              interactionId: interaction.id,
+              error: safeErrorMessage(error)
+            },
+            "Unhandled Discord interaction failure"
+          );
+        })
+        .finally(() => this.activeInteractions.delete(task));
     });
+  }
+
+  public async stop(): Promise<void> {
+    while (this.activeInteractions.size > 0) {
+      await Promise.allSettled([...this.activeInteractions]);
+    }
   }
 
   private async handleInteraction(interaction: Interaction): Promise<void> {
@@ -143,7 +162,11 @@ export class SkyDiscordBot {
           content: `Sky could not complete that command: ${safe}`,
           flags: MessageFlags.Ephemeral
         } as const;
-        if (interaction.deferred || interaction.replied) {
+        if (interaction.deferred) {
+          await interaction
+            .editReply({ content: payload.content })
+            .catch(() => undefined);
+        } else if (interaction.replied) {
           await interaction.followUp(payload).catch(() => undefined);
         } else {
           await interaction.reply(payload).catch(() => undefined);
