@@ -29,8 +29,10 @@ import { createLogger } from "./logger.js";
 import { CartesiaTts } from "./providers/cartesia.js";
 import { GroqTranscriber } from "./providers/groq.js";
 import { OpenCodeProvider } from "./providers/opencode.js";
-import { DpapiSecretStore } from "./secrets.js";
-import { runProcess } from "./windows/process.js";
+import {
+  DpapiSecretStore,
+  unexpectedWindowsAclPrincipals
+} from "./secrets.js";
 import { WindowsServiceManager } from "./windows/service-manager.js";
 
 export interface DoctorCheck {
@@ -82,16 +84,15 @@ export async function runDoctor(options: {
   try {
     secrets = await new DpapiSecretStore(home).load();
     push(checks, "Protected secrets", true, "DPAPI decryption succeeded");
-    const acl = await runProcess("icacls.exe", [
+    const unexpectedAcl = await unexpectedWindowsAclPrincipals(
       path.join(home, "secrets.dpapi")
-    ]);
-    const broad = /\bEveryone:|\bUsers:/i.test(acl.stdout);
+    );
     push(
       checks,
       "Secret file ACL",
-      acl.code === 0 && !broad,
-      broad
-        ? "Secret ACL is broad; rerun `sky setup` from an elevated terminal"
+      unexpectedAcl.length === 0,
+      unexpectedAcl.length > 0
+        ? `Secret ACL grants unexpected principals (${unexpectedAcl.join(", ")}); rerun \`sky setup\` from an elevated terminal`
         : "Restricted ACL readable by owner, SYSTEM and Administrators"
     );
   } catch (error) {
@@ -114,18 +115,24 @@ export async function runDoctor(options: {
   } catch (error) {
     push(checks, "Data location", false, safeErrorMessage(error));
   }
-  const dataAcl = await runProcess("icacls.exe", [config.dataDir]);
-  const dataAclBroad = /\bEveryone:|\bUsers:/i.test(dataAcl.stdout);
-  push(
-    checks,
-    "Data directory ACL",
-    dataAcl.code === 0 && !dataAclBroad,
-    dataAcl.code !== 0
-      ? "Could not inspect the data directory ACL"
-      : dataAclBroad
-        ? "Data ACL is broad; rerun `sky setup` from an elevated terminal"
+  try {
+    const unexpectedAcl = await unexpectedWindowsAclPrincipals(config.dataDir);
+    push(
+      checks,
+      "Data directory ACL",
+      unexpectedAcl.length === 0,
+      unexpectedAcl.length > 0
+        ? `Data ACL grants unexpected principals (${unexpectedAcl.join(", ")}); rerun \`sky setup\` from an elevated terminal`
         : "Restricted ACL readable by owner, SYSTEM and Administrators"
-  );
+    );
+  } catch (error) {
+    push(
+      checks,
+      "Data directory ACL",
+      false,
+      `Could not inspect the data directory ACL: ${safeErrorMessage(error)}`
+    );
+  }
 
   let db: SkyDatabase | undefined;
   try {

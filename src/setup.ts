@@ -4,7 +4,7 @@ import {
   password,
   select
 } from "@inquirer/prompts";
-import { mkdir } from "node:fs/promises";
+import { lstat, mkdir, readdir } from "node:fs/promises";
 import path from "node:path";
 import { detectFfmpeg } from "./audio.js";
 import {
@@ -56,6 +56,48 @@ export function resolveSecretPromptAnswer(
     return undefined;
   }
   return answer || existing;
+}
+
+export async function assertDedicatedDataDirectory(
+  target: string,
+  previousTarget?: string
+): Promise<void> {
+  const resolved = path.resolve(target);
+  if (
+    resolved.toLocaleLowerCase("en-US") ===
+    path.parse(resolved).root.toLocaleLowerCase("en-US")
+  ) {
+    throw new SkyError(
+      "The Sky data location cannot be a drive or filesystem root",
+      "DATA_DIRECTORY_UNSAFE"
+    );
+  }
+  let details;
+  try {
+    details = await lstat(resolved);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  if (!details.isDirectory() || details.isSymbolicLink()) {
+    throw new SkyError(
+      "The Sky data location must be a dedicated directory, not a file or link",
+      "DATA_DIRECTORY_UNSAFE"
+    );
+  }
+  if (
+    previousTarget &&
+    path.resolve(previousTarget).toLocaleLowerCase("en-US") ===
+      resolved.toLocaleLowerCase("en-US")
+  ) {
+    return;
+  }
+  if ((await readdir(resolved)).length > 0) {
+    throw new SkyError(
+      "The Sky data location already contains files; choose a new or empty dedicated directory",
+      "DATA_DIRECTORY_UNSAFE"
+    );
+  }
 }
 
 async function oldState(home?: string): Promise<{
@@ -215,6 +257,7 @@ export async function runSetup(home: string): Promise<void> {
       ? { cartesiaBackupApiKey }
       : {})
   };
+  await assertDedicatedDataDirectory(dataDir, old.config?.dataDir);
   await mkdir(dataDir, { recursive: true });
   await restrictWindowsAcl(dataDir, true);
 

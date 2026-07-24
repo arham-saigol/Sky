@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { ChannelType } from "discord.js";
 import { paginateCharacterLines } from "../src/discord/bot.js";
 import {
@@ -7,7 +10,18 @@ import {
 } from "../src/discord/transport.js";
 import { parseExpression } from "../src/prompts.js";
 import { redact, redactUnknown } from "../src/redaction.js";
-import { resolveSecretPromptAnswer } from "../src/setup.js";
+import {
+  assertDedicatedDataDirectory,
+  resolveSecretPromptAnswer
+} from "../src/setup.js";
+
+const roots: string[] = [];
+
+afterEach(async () => {
+  for (const root of roots.splice(0)) {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 describe("secret and reasoning hygiene", () => {
   it("redacts API keys, Discord tokens, authorization headers and reasoning", () => {
@@ -50,6 +64,22 @@ describe("secret and reasoning hygiene", () => {
       "replacement"
     );
     expect(resolveSecretPromptAnswer("CLEAR", "existing", true)).toBeUndefined();
+  });
+
+  it("refuses to take over a populated data directory", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "sky-data-"));
+    roots.push(root);
+    await writeFile(path.join(root, "unrelated.txt"), "keep");
+
+    await expect(assertDedicatedDataDirectory(root)).rejects.toThrow(
+      "already contains files"
+    );
+    await expect(
+      assertDedicatedDataDirectory(root, root)
+    ).resolves.toBeUndefined();
+    await expect(
+      assertDedicatedDataDirectory(path.parse(root).root)
+    ).rejects.toThrow("cannot be a drive or filesystem root");
   });
 });
 

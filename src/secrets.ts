@@ -79,6 +79,34 @@ export async function restrictWindowsAcl(
   await powershell(script, "");
 }
 
+export async function unexpectedWindowsAclPrincipals(
+  target: string
+): Promise<string[]> {
+  if (process.platform !== "win32") {
+    throw new SkyError(
+      "Windows ACL inspection is available only on Windows",
+      "WINDOWS_REQUIRED"
+    );
+  }
+  const escaped = target.replaceAll("'", "''");
+  const script = [
+    "$ErrorActionPreference='Stop'",
+    `$target='${escaped}'`,
+    "$allowed=[System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)",
+    "[void]$allowed.Add([System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value)",
+    "[void]$allowed.Add('S-1-5-18')",
+    "[void]$allowed.Add('S-1-5-32-544')",
+    "$unexpected=@()",
+    "foreach($rule in (Get-Acl -LiteralPath $target).Access){if($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow){continue};try{$sid=$rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value}catch{$sid=$rule.IdentityReference.Value};if(!$allowed.Contains($sid)){$unexpected+=$sid}}",
+    "$unexpected | Sort-Object -Unique"
+  ].join(";");
+  return (await powershell(script, ""))
+    .toString("utf8")
+    .split(/\r?\n/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
 export class DpapiSecretStore implements SecretStore {
   private readonly file: string;
 
