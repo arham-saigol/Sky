@@ -208,16 +208,17 @@ export class CharacterFiles {
   public async read(
     character: CharacterRow
   ): Promise<{ soul: string; memory: string }> {
-    await this.reconcile(character);
-    const [soul, memory] = await Promise.all([
-      readFile(character.soul_path, "utf8"),
-      readFile(character.memory_path, "utf8")
-    ]);
-    return { soul, memory };
+    return await this.reconcileSnapshot(character);
   }
 
   public async reconcile(character: CharacterRow): Promise<void> {
-    await this.mutex.runExclusive(character.id, async () => {
+    await this.reconcileSnapshot(character);
+  }
+
+  private async reconcileSnapshot(
+    character: CharacterRow
+  ): Promise<{ soul: string; memory: string }> {
+    return await this.mutex.runExclusive(character.id, async () => {
       const directory = path.dirname(character.soul_path);
       await mkdir(directory, { recursive: true });
       const release = await lockfile.lock(directory, {
@@ -226,6 +227,8 @@ export class CharacterFiles {
         stale: 30_000
       });
       try {
+        let soul = "";
+        let memory = "";
         const files: Array<{
           kind: "SOUL" | "MEMORY";
           file: string;
@@ -263,7 +266,10 @@ export class CharacterFiles {
               source: "external"
             });
           }
+          if (item.kind === "SOUL") soul = content;
+          else memory = content;
         }
+        return { soul, memory };
       } finally {
         await release();
       }

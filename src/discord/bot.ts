@@ -434,7 +434,18 @@ export class SkyDiscordBot {
         );
         return;
       }
-      this.db.updateSessionSettings(session.id, { reasoningMode: requested });
+      if (
+        !this.db.updateReasoningModeIfModel(
+          session.id,
+          session.model_id,
+          requested
+        )
+      ) {
+        await interaction.editReply(
+          "The model changed while reasoning capabilities were loading. Run `/reasoning` again."
+        );
+        return;
+      }
       await interaction.editReply(
         `Reasoning mode is now **${requested}** for this thread.`
       );

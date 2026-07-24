@@ -127,6 +127,35 @@ describe("SQLite persistence and recovery", () => {
     db.close();
   });
 
+  it("updates reasoning only for the model whose modes were validated", async () => {
+    const { db, root } = await database();
+    const character = db.createCharacter({
+      name: "Reasoning",
+      slug: "reasoning",
+      soulPath: path.join(root, "SOUL.md"),
+      memoryPath: path.join(root, "MEMORY.md"),
+      voice: "Katie"
+    });
+    const session = db.createSession({
+      characterId: character.id,
+      threadId: "thread-reasoning",
+      guildId: "guild",
+      lobbyChannelId: "lobby"
+    });
+    expect(
+      db.updateReasoningModeIfModel(session.id, "deepseek-v4-pro", "high")
+    ).toBe(true);
+    db.updateSessionSettings(session.id, { modelId: "hy3" });
+    expect(
+      db.updateReasoningModeIfModel(session.id, "deepseek-v4-pro", "low")
+    ).toBe(false);
+    expect(db.getSession(session.id)).toMatchObject({
+      model_id: "hy3",
+      reasoning_mode: "default"
+    });
+    db.close();
+  });
+
   it("deduplicates Discord events, messages and outbound work", async () => {
     const { db, root } = await database();
     const character = db.createCharacter({
@@ -330,6 +359,60 @@ describe("SQLite persistence and recovery", () => {
         byteBounded.to_message_id
       )
     ).toHaveLength(1);
+
+    const pairedSession = db.createSession({
+      characterId: character.id,
+      threadId: "thread-pair-bounded",
+      guildId: "guild",
+      lobbyChannelId: "lobby"
+    });
+    db.appendMessage({
+      sessionId: pairedSession.id,
+      discordMessageId: "pair-prior-owner",
+      role: "owner",
+      content: "Prior question",
+      source: "text"
+    });
+    db.appendMessage({
+      sessionId: pairedSession.id,
+      discordMessageId: "pair-prior-assistant",
+      role: "assistant",
+      content: "Prior answer",
+      source: "text",
+      triggeringDiscordMessageId: "pair-prior-owner"
+    });
+    db.appendMessage({
+      sessionId: pairedSession.id,
+      discordMessageId: "pair-large-owner",
+      role: "owner",
+      content: "o".repeat(30_000),
+      source: "text"
+    });
+    db.appendMessage({
+      sessionId: pairedSession.id,
+      discordMessageId: "pair-large-assistant",
+      role: "assistant",
+      content: "a".repeat(30_000),
+      source: "text",
+      triggeringDiscordMessageId: "pair-large-owner"
+    });
+    const pairedFirst = db.createCurationJob(pairedSession.id, "end")!;
+    expect(
+      db.messagesInRange(
+        pairedSession.id,
+        pairedFirst.from_message_id,
+        pairedFirst.to_message_id
+      ).map((message) => message.discord_message_id)
+    ).toEqual(["pair-prior-owner", "pair-prior-assistant"]);
+    db.completeCurationJob(pairedFirst);
+    const pairedSecond = db.createCurationJob(pairedSession.id, "end")!;
+    expect(
+      db.messagesInRange(
+        pairedSession.id,
+        pairedSecond.from_message_id,
+        pairedSecond.to_message_id
+      ).map((message) => message.discord_message_id)
+    ).toEqual(["pair-large-owner", "pair-large-assistant"]);
     db.close();
   });
 

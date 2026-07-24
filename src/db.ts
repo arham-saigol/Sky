@@ -394,6 +394,20 @@ export class SkyDatabase {
     }
   }
 
+  public updateReasoningModeIfModel(
+    id: string,
+    expectedModelId: ModelId,
+    reasoningMode: string
+  ): boolean {
+    return (
+      this.raw
+        .prepare(
+          "UPDATE sessions SET reasoning_mode = ? WHERE id = ? AND model_id = ?"
+        )
+        .run(reasoningMode, id, expectedModelId).changes === 1
+    );
+  }
+
   public beginEndSession(id: string): SessionRow {
     this.raw
       .prepare(
@@ -855,7 +869,7 @@ export class SkyDatabase {
            ORDER BY id
            LIMIT ?`
         )
-        .all(sessionId, from, MAX_CURATION_MESSAGES) as MessageRow[];
+        .all(sessionId, from, MAX_CURATION_MESSAGES + 1) as MessageRow[];
       const messages: MessageRow[] = [];
       let transcriptBytes = 0;
       for (const message of candidates) {
@@ -863,10 +877,24 @@ export class SkyDatabase {
           `${message.role}\0${message.content}`,
           "utf8"
         );
-        if (
+        const overCount = messages.length >= MAX_CURATION_MESSAGES;
+        const overBytes =
           messages.length > 0 &&
-          transcriptBytes + messageBytes > MAX_CURATION_TRANSCRIPT_BYTES
-        ) {
+          transcriptBytes + messageBytes > MAX_CURATION_TRANSCRIPT_BYTES;
+        if (overCount || overBytes) {
+          const previous = messages.at(-1);
+          if (
+            previous?.role === "owner" &&
+            message.role === "assistant" &&
+            message.triggering_discord_message_id ===
+              previous.discord_message_id
+          ) {
+            if (messages.length === 1) {
+              messages.push(message);
+            } else {
+              messages.pop();
+            }
+          }
           break;
         }
         messages.push(message);
