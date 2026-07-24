@@ -1,0 +1,49 @@
+{
+  "name": "sky-roleplay",
+  "version": "1.0.0",
+  "description": "Self-hosted, single-owner Discord roleplay AI for Windows",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "sky": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "migrations",
+    "examples",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "verify": "npm run lint && npm run typecheck && npm run test && npm run build",
+    "smoke": "node dist/cli.js doctor --online",
+    "start:foreground": "node dist/service.js --foreground"
+  },
+  "dependencies": {
+    "@inquirer/prompts": "8.5.2",
+    "better-sqlite3": "13.0.1",
+    "commander": "15.0.0",
+    "discord.js": "14.27.0",
+    "pino": "10.3.1",
+    "proper-lockfile": "4.1.2",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "24.10.1",
+    "@types/proper-lockfile": "4.1.4",
+    "eslint": "9.39.2",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.57.0",
+    "vitest": "4.1.0"
+  }
+}
