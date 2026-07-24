@@ -5,7 +5,10 @@ import pino from "pino";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CharacterFiles } from "../src/characters.js";
 import { CurationScheduler } from "../src/curation.js";
-import { SkyDatabase } from "../src/db.js";
+import {
+  MAX_CURATION_MESSAGES,
+  SkyDatabase
+} from "../src/db.js";
 import { KeyedMutex } from "../src/util/mutex.js";
 
 const roots: string[] = [];
@@ -68,7 +71,7 @@ describe("dreamer and curator", () => {
     );
     await scheduler.endSession(session.id);
     for (let attempt = 0; attempt < 100; attempt++) {
-      if (db.getSession(session.id)?.state === "ended") break;
+      if (db.getSession(session.id)?.archived_at) break;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     expect(provider.curate).toHaveBeenCalledTimes(1);
@@ -80,6 +83,68 @@ describe("dreamer and curator", () => {
       accepting_messages: 0
     });
     expect(archiver.archiveAndLockThread).toHaveBeenCalledWith("thread");
+    db.close();
+  });
+
+  it("drains bounded curation segments before ending the session", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "sky-curate-"));
+    roots.push(root);
+    const db = new SkyDatabase(path.join(root, "sky.sqlite"));
+    dbs.push(db);
+    const characters = new CharacterFiles(db, path.join(root, "characters"));
+    await characters.initialize();
+    const character = await characters.create({
+      name: "Mara",
+      identity: "A 29-year-old fictional adult.",
+      personality: "Careful.",
+      appearance: "An adult woman.",
+      settingAndBoundaries: "Fictional, consensual.",
+      voice: "Katie"
+    });
+    const session = db.createSession({
+      characterId: character.id,
+      threadId: "thread-segmented",
+      guildId: "guild",
+      lobbyChannelId: "lobby"
+    });
+    for (let index = 0; index < MAX_CURATION_MESSAGES + 2; index++) {
+      db.appendMessage({
+        sessionId: session.id,
+        discordMessageId: `segmented-${index}`,
+        role: index % 2 === 0 ? "owner" : "assistant",
+        content: `Message ${index}`,
+        source: "text"
+      });
+    }
+    const state = await characters.read(character);
+    const provider = {
+      curate: vi.fn().mockResolvedValue(
+        JSON.stringify({
+          soul_markdown: state.soul,
+          memory_markdown: state.memory,
+          summary: "Processed a bounded segment."
+        })
+      )
+    };
+    const archiver = {
+      archiveAndLockThread: vi.fn().mockResolvedValue(undefined)
+    };
+    const scheduler = new CurationScheduler(
+      db,
+      characters,
+      provider as never,
+      archiver,
+      pino({ enabled: false }),
+      1_000_000
+    );
+    await scheduler.endSession(session.id);
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (db.getSession(session.id)?.archived_at) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(provider.curate).toHaveBeenCalledTimes(2);
+    expect(db.getSession(session.id)?.state).toBe("ended");
+    expect(archiver.archiveAndLockThread).toHaveBeenCalledTimes(1);
     db.close();
   });
 

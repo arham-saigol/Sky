@@ -19,6 +19,7 @@ import { MODEL_IDS, VOICE_NAMES, type VoiceName } from "./constants.js";
 import { GUILD_COMMANDS } from "./discord/commands.js";
 import {
   DiscordTransport,
+  isSupportedLobbyType,
   requiredLobbyPermissions
 } from "./discord/transport.js";
 import { SkyError } from "./errors.js";
@@ -259,6 +260,12 @@ export async function runSetup(home: string): Promise<void> {
     if (!guild.guild || !guild.owner || !guild.lobby) {
       throw new SkyError(
         "Discord guild, owner, or lobby could not be resolved",
+        "DISCORD_CONFIGURATION"
+      );
+    }
+    if (!isSupportedLobbyType(guild.lobbyType)) {
+      throw new SkyError(
+        "Discord lobby must be a text or forum channel",
         "DISCORD_CONFIGURATION"
       );
     }

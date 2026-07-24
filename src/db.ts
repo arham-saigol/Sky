@@ -86,6 +86,9 @@ export interface NewSession {
   lobbyChannelId: string;
 }
 
+export const MAX_CURATION_MESSAGES = 20;
+export const MAX_CURATION_TRANSCRIPT_BYTES = 48 * 1024;
+
 function now(): string {
   return new Date().toISOString();
 }
@@ -800,12 +803,6 @@ export class SkyDatabase {
     return this.raw.transaction(() => {
       const session = this.getSession(sessionId);
       if (!session) return undefined;
-      const top = this.raw
-        .prepare(
-          "SELECT MAX(id) AS max_id FROM messages WHERE session_id = ?"
-        )
-        .get(sessionId) as { max_id: number | null };
-      const to = top.max_id ?? 0;
       const reserved = this.raw
         .prepare(
           `SELECT COALESCE(MAX(to_message_id), ?) AS reserved_to
@@ -818,13 +815,32 @@ export class SkyDatabase {
         session.curation_watermark_id,
         reserved.reserved_to
       );
-      if (to <= from) return undefined;
-      const messages = this.messagesInRange(
-        sessionId,
-        from,
-        to
-      );
+      const candidates = this.raw
+        .prepare(
+          `SELECT * FROM messages
+           WHERE session_id = ? AND id > ?
+           ORDER BY id
+           LIMIT ?`
+        )
+        .all(sessionId, from, MAX_CURATION_MESSAGES) as MessageRow[];
+      const messages: MessageRow[] = [];
+      let transcriptBytes = 0;
+      for (const message of candidates) {
+        const messageBytes = Buffer.byteLength(
+          `${message.role}\0${message.content}`,
+          "utf8"
+        );
+        if (
+          messages.length > 0 &&
+          transcriptBytes + messageBytes > MAX_CURATION_TRANSCRIPT_BYTES
+        ) {
+          break;
+        }
+        messages.push(message);
+        transcriptBytes += messageBytes;
+      }
       if (messages.length === 0) return undefined;
+      const to = messages.at(-1)!.id;
       const digest = createHash("sha256")
         .update(
           messages

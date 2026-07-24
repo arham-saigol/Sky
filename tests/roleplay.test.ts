@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import pino from "pino";
@@ -201,6 +201,69 @@ describe("roleplay authorization and idempotency", () => {
       { role: "owner", content: "Later message" },
       { role: "assistant", content: "Later reply." },
       { role: "assistant", content: "Recovered reply." }
+    ]);
+    db.close();
+  });
+
+  it("retries interrupted voice inputs during the bounded recovery pass", async () => {
+    const { root, db, characters, session } = await fixture();
+    const localPath = path.join(root, "interrupted-voice.ogg");
+    await writeFile(localPath, "ogg");
+    const attachmentId = db.createAttachment({
+      sessionId: session.id,
+      discordMessageId: "owner-voice",
+      discordAttachmentId: "attachment-voice",
+      url: "https://example.invalid/voice.ogg",
+      contentType: "audio/ogg",
+      filename: "voice.ogg",
+      sizeBytes: 3
+    });
+    db.updateAttachment(attachmentId, {
+      status: "failed",
+      localPath
+    });
+    const groq = {
+      transcribe: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("temporary transcription failure"))
+        .mockResolvedValueOnce("Recovered voice transcript.")
+    };
+    const openCode = {
+      roleplay: vi.fn().mockResolvedValue({
+        content: "Recovered voice reply.",
+        actualModel: "deepseek-v4-pro",
+        fellBack: false
+      })
+    };
+    const sender = {
+      sendText: vi
+        .fn()
+        .mockResolvedValueOnce("diagnostic")
+        .mockResolvedValueOnce("assistant-voice"),
+      sendVoice: vi.fn()
+    };
+    const engine = new RoleplayEngine(
+      "owner",
+      "guild",
+      root,
+      db,
+      characters,
+      openCode as never,
+      groq as never,
+      { synthesize: vi.fn() } as never,
+      sender as never,
+      pino({ enabled: false })
+    );
+    await engine.recoverIncomplete(3, 1);
+    expect(groq.transcribe).toHaveBeenCalledTimes(2);
+    expect(openCode.roleplay).toHaveBeenCalledTimes(1);
+    expect(db.incompleteVoiceInputs()).toEqual([]);
+    expect(db.incompleteOutbounds()).toEqual([]);
+    expect(
+      db.raw.prepare("SELECT role, content FROM messages ORDER BY id").all()
+    ).toEqual([
+      { role: "owner", content: "Recovered voice transcript." },
+      { role: "assistant", content: "Recovered voice reply." }
     ]);
     db.close();
   });

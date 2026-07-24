@@ -2,7 +2,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { SkyDatabase } from "../src/db.js";
+import {
+  MAX_CURATION_MESSAGES,
+  MAX_CURATION_TRANSCRIPT_BYTES,
+  SkyDatabase
+} from "../src/db.js";
 
 const roots: string[] = [];
 const dbs: SkyDatabase[] = [];
@@ -222,6 +226,75 @@ describe("SQLite persistence and recovery", () => {
     db.completeCurationJob(claimedFirst!);
     const claimedSecond = db.claimDueCurationJob("2030-01-01T00:00:00.000Z");
     expect(claimedSecond?.id).toBe(second.id);
+    db.close();
+  });
+
+  it("bounds large curation backlogs into ordered segments", async () => {
+    const { db, root } = await database();
+    const character = db.createCharacter({
+      name: "Bounded",
+      slug: "bounded",
+      soulPath: path.join(root, "SOUL.md"),
+      memoryPath: path.join(root, "MEMORY.md"),
+      voice: "Katie"
+    });
+    const session = db.createSession({
+      characterId: character.id,
+      threadId: "thread-bounded",
+      guildId: "guild",
+      lobbyChannelId: "lobby"
+    });
+    for (let index = 0; index < MAX_CURATION_MESSAGES + 2; index++) {
+      db.appendMessage({
+        sessionId: session.id,
+        discordMessageId: `bounded-${index}`,
+        role: index % 2 === 0 ? "owner" : "assistant",
+        content: `Message ${index}`,
+        source: "text"
+      });
+    }
+    const first = db.createCurationJob(session.id, "end")!;
+    expect(
+      db.messagesInRange(
+        session.id,
+        first.from_message_id,
+        first.to_message_id
+      )
+    ).toHaveLength(MAX_CURATION_MESSAGES);
+    db.completeCurationJob(first);
+    const second = db.createCurationJob(session.id, "end")!;
+    expect(second.from_message_id).toBe(first.to_message_id);
+    expect(
+      db.messagesInRange(
+        session.id,
+        second.from_message_id,
+        second.to_message_id
+      )
+    ).toHaveLength(2);
+
+    const byteSession = db.createSession({
+      characterId: character.id,
+      threadId: "thread-byte-bounded",
+      guildId: "guild",
+      lobbyChannelId: "lobby"
+    });
+    for (let index = 0; index < 2; index++) {
+      db.appendMessage({
+        sessionId: byteSession.id,
+        discordMessageId: `byte-bounded-${index}`,
+        role: index === 0 ? "owner" : "assistant",
+        content: "x".repeat(MAX_CURATION_TRANSCRIPT_BYTES / 2 + 1),
+        source: "text"
+      });
+    }
+    const byteBounded = db.createCurationJob(byteSession.id, "end")!;
+    expect(
+      db.messagesInRange(
+        byteSession.id,
+        byteBounded.from_message_id,
+        byteBounded.to_message_id
+      )
+    ).toHaveLength(1);
     db.close();
   });
 

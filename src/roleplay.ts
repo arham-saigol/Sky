@@ -149,31 +149,29 @@ export class RoleplayEngine {
     maxAttempts = 3,
     baseDelayMs = 1_000
   ): Promise<void> {
-    for (const input of this.db.incompleteVoiceInputs()) {
-      await this.handle({
-        eventId: input.event_id,
-        authorId: this.ownerId,
-        guildId: input.guild_id,
-        threadId: input.thread_id,
-        content: "",
-        createdAt: input.created_at,
-        voice: {
-          id: input.attachment_id,
-          url: input.url,
-          filename: input.filename,
-          contentType: input.content_type,
-          size: input.size_bytes,
-          ...(input.duration_seconds === null
-            ? {}
-            : { duration: input.duration_seconds }),
-          ...(input.waveform === null ? {} : { waveform: input.waveform })
-        }
-      });
-    }
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const incomplete = this.db.incompleteOutbounds();
-      if (incomplete.length === 0) return;
-      for (const item of incomplete) {
+      for (const input of this.db.incompleteVoiceInputs()) {
+        await this.handle({
+          eventId: input.event_id,
+          authorId: this.ownerId,
+          guildId: input.guild_id,
+          threadId: input.thread_id,
+          content: "",
+          createdAt: input.created_at,
+          voice: {
+            id: input.attachment_id,
+            url: input.url,
+            filename: input.filename,
+            contentType: input.content_type,
+            size: input.size_bytes,
+            ...(input.duration_seconds === null
+              ? {}
+              : { duration: input.duration_seconds }),
+            ...(input.waveform === null ? {} : { waveform: input.waveform })
+          }
+        });
+      }
+      for (const item of this.db.incompleteOutbounds()) {
         await this.processTrigger(
           item.session_id,
           item.trigger_id,
@@ -192,12 +190,19 @@ export class RoleplayEngine {
           );
         });
       }
+      const voiceRemaining = this.db.incompleteVoiceInputs().length;
+      const outboundRemaining = this.db.incompleteOutbounds().length;
+      if (voiceRemaining === 0 && outboundRemaining === 0) return;
       if (
-        attempt < maxAttempts &&
-        this.db.incompleteOutbounds().length > 0
+        attempt < maxAttempts
       ) {
         await new Promise((resolve) =>
           setTimeout(resolve, baseDelayMs * 2 ** (attempt - 1))
+        );
+      } else {
+        this.logger.warn(
+          { voiceRemaining, outboundRemaining, attempts: maxAttempts },
+          "Incomplete roleplay recovery exhausted startup retries"
         );
       }
     }

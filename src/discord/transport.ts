@@ -15,6 +15,13 @@ import type { SkyConfig } from "../config.js";
 import type { SkySecrets } from "../config.js";
 import { GUILD_COMMANDS } from "./commands.js";
 
+export function isSupportedLobbyType(lobbyType?: number): boolean {
+  return (
+    lobbyType === ChannelType.GuildText ||
+    lobbyType === ChannelType.GuildForum
+  );
+}
+
 export function requiredLobbyPermissions(lobbyType?: number): string[] {
   return [
     "ViewChannel",

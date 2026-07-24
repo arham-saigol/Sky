@@ -270,6 +270,31 @@ describe("character Markdown durability", () => {
     db.close();
   });
 
+  it("rejects a negated fictional-adult invariant", async () => {
+    const { db, files, character } = await fixture();
+    const session = db.createSession({
+      characterId: character.id,
+      threadId: "thread-invariant",
+      guildId: "guild",
+      lobbyChannelId: "lobby"
+    });
+    db.appendMessage({
+      sessionId: session.id,
+      discordMessageId: "message-invariant",
+      role: "owner",
+      content: "x",
+      source: "text"
+    });
+    const job = db.createCurationJob(session.id, "end")!;
+    await expect(
+      files.applyCuration(character, job, {
+        soul: `# ${character.name}\n\nParticipants are not fictional adults.\n`,
+        memory: "# Persistent memory\n\nNone.\n"
+      })
+    ).rejects.toThrow(/canonical fictional-adult invariant/i);
+    db.close();
+  });
+
   it("permanently removes ended character state and physical files", async () => {
     const { db, files, character } = await fixture();
     const session = db.createSession({

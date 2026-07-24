@@ -33,6 +33,8 @@ interface CurationJournal {
 }
 
 export const MAX_CHARACTER_FILE_BYTES = 8 * 1024;
+export const FICTIONAL_ADULT_INVARIANT =
+  "This character and every roleplay participant are consenting fictional adults.";
 
 function sha256(content: string): string {
   return createHash("sha256").update(content).digest("hex");
@@ -68,7 +70,7 @@ function soulTemplate(definition: CharacterDefinition): string {
 
 ${definition.identity.trim()}
 
-This character and every roleplay participant are consenting fictional adults.
+${FICTIONAL_ADULT_INVARIANT}
 
 ## Personality
 
@@ -401,9 +403,13 @@ export class CharacterFiles {
           "UNSAFE_CURATION"
         );
       }
-      if (!/fictional adults?/i.test(content)) {
+      if (
+        !content
+          .split(/\r?\n/)
+          .some((line) => line.trim() === FICTIONAL_ADULT_INVARIANT)
+      ) {
         throw new SkyError(
-          "SOUL.md must preserve the fictional-adult invariant",
+          "SOUL.md must preserve the canonical fictional-adult invariant",
           "UNSAFE_CURATION"
         );
       }

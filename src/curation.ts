@@ -142,13 +142,15 @@ export class CurationScheduler {
         state
       );
       const updated = this.db.completeCurationJob(job);
+      const next = this.db.createCurationJob(job.session_id, job.trigger);
       await this.characters.finalizeCuration(character, job);
       this.logger.info(
         {
           jobId: job.id,
           characterId: character.id,
           trigger: job.trigger,
-          summary: parsed.summary
+          summary: parsed.summary,
+          continuationQueued: Boolean(next)
         },
         "Curation completed"
       );
