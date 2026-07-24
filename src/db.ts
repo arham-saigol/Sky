@@ -450,6 +450,31 @@ export class SkyDatabase {
     );
   }
 
+  public messagesThroughTrigger(
+    sessionId: string,
+    triggerDiscordMessageId: string,
+    limit: number
+  ): MessageRow[] {
+    return this.raw
+      .prepare(
+        `SELECT * FROM (
+           SELECT * FROM messages
+           WHERE session_id = ?
+             AND id <= (
+               SELECT id FROM messages
+               WHERE session_id = ? AND discord_message_id = ?
+             )
+           ORDER BY id DESC LIMIT ?
+         ) ORDER BY id`
+      )
+      .all(
+        sessionId,
+        sessionId,
+        triggerDiscordMessageId,
+        limit
+      ) as MessageRow[];
+  }
+
   public messagesInRange(
     sessionId: string,
     fromExclusive: number,

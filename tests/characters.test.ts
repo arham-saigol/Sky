@@ -1,6 +1,7 @@
 import {
   access,
   mkdtemp,
+  mkdir,
   readFile,
   readdir,
   rm,
@@ -240,6 +241,19 @@ describe("character Markdown durability", () => {
     ).toBe(0);
     await expect(access(character.soul_path)).rejects.toThrow();
     await expect(access(character.memory_path)).rejects.toThrow();
+    db.close();
+  });
+
+  it("keeps character metadata when a file cannot be removed", async () => {
+    const { db, files, character } = await fixture();
+    await rm(character.soul_path);
+    await mkdir(character.soul_path);
+    await expect(files.deleteFiles(character)).rejects.toThrow();
+    expect(db.getCharacterById(character.id)).toMatchObject({
+      id: character.id,
+      soul_path: character.soul_path
+    });
+    expect(db.latestRevision(character.id, "SOUL")).toBeDefined();
     db.close();
   });
 });

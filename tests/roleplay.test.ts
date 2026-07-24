@@ -141,6 +141,12 @@ describe("roleplay authorization and idempotency", () => {
         .fn()
         .mockRejectedValueOnce(new Error("temporary failure"))
         .mockResolvedValueOnce({
+          content: "Later reply.",
+          actualModel: "deepseek-v4-pro",
+          fellBack: false
+        })
+        .mockRejectedValueOnce(new Error("recovery retry"))
+        .mockResolvedValueOnce({
           content: "Recovered reply.",
           actualModel: "deepseek-v4-pro",
           fellBack: false
@@ -150,6 +156,7 @@ describe("roleplay authorization and idempotency", () => {
       sendText: vi
         .fn()
         .mockResolvedValueOnce("diagnostic-message")
+        .mockResolvedValueOnce("assistant-later")
         .mockResolvedValueOnce("assistant-recovered"),
       sendVoice: vi.fn()
     };
@@ -174,12 +181,25 @@ describe("roleplay authorization and idempotency", () => {
       createdAt: "2026-01-01T00:00:00.000Z"
     });
     expect(sender.sendText.mock.calls[0]?.[2]).toBe("e-owner-failure");
-    await engine.recoverIncomplete();
-    expect(sender.sendText.mock.calls[1]?.[2]).toBe("owner-failure");
+    await engine.handle({
+      eventId: "owner-later",
+      authorId: "owner",
+      guildId: "guild",
+      threadId: "thread",
+      content: "Later message",
+      createdAt: "2026-01-01T00:00:01.000Z"
+    });
+    await engine.recoverIncomplete(3, 1);
+    expect(sender.sendText.mock.calls[2]?.[2]).toBe("owner-failure");
+    expect(openCode.roleplay.mock.calls[3]?.[1].messages).toEqual([
+      { role: "user", content: "Please retry" }
+    ]);
     expect(
       db.raw.prepare("SELECT role, content FROM messages ORDER BY id").all()
     ).toEqual([
       { role: "owner", content: "Please retry" },
+      { role: "owner", content: "Later message" },
+      { role: "assistant", content: "Later reply." },
       { role: "assistant", content: "Recovered reply." }
     ]);
     db.close();

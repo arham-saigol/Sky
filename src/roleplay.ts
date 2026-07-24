@@ -145,7 +145,10 @@ export class RoleplayEngine {
     }
   }
 
-  public async recoverIncomplete(): Promise<void> {
+  public async recoverIncomplete(
+    maxAttempts = 3,
+    baseDelayMs = 1_000
+  ): Promise<void> {
     for (const input of this.db.incompleteVoiceInputs()) {
       await this.handle({
         eventId: input.event_id,
@@ -167,19 +170,36 @@ export class RoleplayEngine {
         }
       });
     }
-    for (const item of this.db.incompleteOutbounds()) {
-      await this.processTrigger(item.session_id, item.trigger_id, item.source).catch(
-        (error) => {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const incomplete = this.db.incompleteOutbounds();
+      if (incomplete.length === 0) return;
+      for (const item of incomplete) {
+        await this.processTrigger(
+          item.session_id,
+          item.trigger_id,
+          item.source
+        ).catch((error) => {
           this.logger.warn(
             {
               sessionId: item.session_id,
               triggerId: item.trigger_id,
+              attempt,
               error: safeErrorMessage(error)
             },
-            "Incomplete response recovery will retry later"
+            attempt < maxAttempts
+              ? "Incomplete response recovery will retry"
+              : "Incomplete response recovery exhausted startup retries"
           );
-        }
-      );
+        });
+      }
+      if (
+        attempt < maxAttempts &&
+        this.db.incompleteOutbounds().length > 0
+      ) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, baseDelayMs * 2 ** (attempt - 1))
+        );
+      }
     }
   }
 
@@ -302,7 +322,11 @@ export class RoleplayEngine {
         const files = await this.characters.read(character);
         const prompt = buildRoleplayPrompt({
           ...files,
-          recent: this.db.recentMessages(session.id, MAX_RECENT_MESSAGES),
+          recent: this.db.messagesThroughTrigger(
+            session.id,
+            triggerId,
+            MAX_RECENT_MESSAGES
+          ),
           spoken
         });
         const result = await this.openCode.roleplay(

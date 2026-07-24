@@ -29,6 +29,7 @@ program
     const home = skyHome();
     const config = await loadConfig(home);
     const service = new WindowsServiceManager(home);
+    const requestedAt = Date.now();
     await service.start();
     const deadline = Date.now() + 45_000;
     let db: SkyDatabase | undefined;
@@ -38,10 +39,18 @@ program
           db ??= new SkyDatabase(path.join(config.dataDir, "sky.sqlite"));
           const runtime = db.getServiceState<{
             state?: string;
+            startedAt?: string;
             heartbeatAt?: string;
             gateway?: { connected?: boolean; ping?: number };
           }>("runtime");
-          if (runtime?.state === "running" && runtime.gateway?.connected) {
+          const fresh =
+            runtime?.startedAt !== undefined &&
+            new Date(runtime.startedAt).getTime() >= requestedAt;
+          if (
+            fresh &&
+            runtime.state === "running" &&
+            runtime.gateway?.connected
+          ) {
             console.log(
               `Sky is running; Discord Gateway connected (${runtime.gateway.ping ?? -1} ms).`
             );

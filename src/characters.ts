@@ -36,6 +36,12 @@ function sha256(content: string): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
+async function unlinkIfPresent(file: string): Promise<void> {
+  await unlink(file).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT") throw error;
+  });
+}
+
 function slugify(name: string): string {
   const slug = name
     .normalize("NFKD")
@@ -329,9 +335,9 @@ export class CharacterFiles {
     await this.mutex.runExclusive(character.id, async () => {
       const attachmentPaths = this.db.attachmentPathsForCharacter(character.id);
       await Promise.all([
-        unlink(character.soul_path).catch(() => undefined),
-        unlink(character.memory_path).catch(() => undefined),
-        ...attachmentPaths.map((file) => unlink(file).catch(() => undefined))
+        unlinkIfPresent(character.soul_path),
+        unlinkIfPresent(character.memory_path),
+        ...attachmentPaths.map((file) => unlinkIfPresent(file))
       ]);
       this.db.permanentlyDeleteCharacter(character.id);
       await rmdir(path.dirname(character.soul_path)).catch(() => undefined);
