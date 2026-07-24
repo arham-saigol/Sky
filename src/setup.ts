@@ -262,6 +262,12 @@ export async function runSetup(home: string): Promise<void> {
         "DISCORD_CONFIGURATION"
       );
     }
+    if (!guild.lobbyNsfw) {
+      throw new SkyError(
+        "Discord lobby must be marked age-restricted before setup can continue",
+        "DISCORD_CONFIGURATION"
+      );
+    }
     const missingPermissions = requiredLobbyPermissions(
       guild.lobbyType
     ).filter(

@@ -420,31 +420,29 @@ export class SkyDiscordBot {
     interaction: ChatInputCommandInteraction,
     session: SessionRow
   ): Promise<void> {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const capabilities = await this.reasoningCapabilities(session.model_id);
     const requested = interaction.options.getString("mode");
     if (requested) {
       if (!capabilities.modes.includes(requested)) {
-        await interaction.reply({
-          content: `That mode is not verified for **${MODEL_NAMES[session.model_id]}**. Available: ${capabilities.modes.join(", ")}.`,
-          flags: MessageFlags.Ephemeral
-        });
+        await interaction.editReply(
+          `That mode is not verified for **${MODEL_NAMES[session.model_id]}**. Available: ${capabilities.modes.join(", ")}.`
+        );
         return;
       }
       this.db.updateSessionSettings(session.id, { reasoningMode: requested });
-      await interaction.reply({
-        content: `Reasoning mode is now **${requested}** for this thread.`,
-        flags: MessageFlags.Ephemeral
-      });
+      await interaction.editReply(
+        `Reasoning mode is now **${requested}** for this thread.`
+      );
       return;
     }
     const explanation =
       capabilities.modes.length === 1
         ? "The provider currently exposes no selectable reasoning modes, so only the model default is available."
         : `Verified modes: ${capabilities.modes.join(", ")}.`;
-    await interaction.reply({
-      content: `Current: **${session.reasoning_mode}** for **${MODEL_NAMES[session.model_id]}**.\n${explanation}`,
-      flags: MessageFlags.Ephemeral
-    });
+    await interaction.editReply(
+      `Current: **${session.reasoning_mode}** for **${MODEL_NAMES[session.model_id]}**.\n${explanation}`
+    );
   }
 
   private async handleAutocomplete(
@@ -475,10 +473,10 @@ export class SkyDiscordBot {
         await interaction.respond([]);
         return;
       }
-      const capabilities = await this.reasoningCapabilities(session.model_id);
+      const capabilities = this.db.getModelCapabilities(session.model_id);
       const focused = interaction.options.getFocused().toLocaleLowerCase();
       await interaction.respond(
-        capabilities.modes
+        (capabilities?.modes ?? ["default"])
           .filter((mode) => mode.toLocaleLowerCase().includes(focused))
           .slice(0, 25)
           .map((mode) => ({ name: mode, value: mode }))
