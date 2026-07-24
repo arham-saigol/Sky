@@ -58,6 +58,9 @@ describe("Discord lobby permissions", () => {
     expect(requiredLobbyPermissions(ChannelType.GuildText)).toContain(
       "CreatePrivateThreads"
     );
+    expect(requiredLobbyPermissions(ChannelType.GuildText)).toContain(
+      "SendVoiceMessages"
+    );
   });
 
   it("paginates character listings within Discord's message limit", () => {

@@ -105,13 +105,29 @@ program
       heartbeatAt?: string;
       gateway?: { connected?: boolean; ping?: number; user?: string };
     }>("runtime");
+    const heartbeatAge = runtime?.heartbeatAt
+      ? Date.now() - new Date(runtime.heartbeatAt).getTime()
+      : Number.POSITIVE_INFINITY;
+    const runtimeFresh =
+      serviceState === "running" &&
+      runtime?.state === "running" &&
+      heartbeatAge >= 0 &&
+      heartbeatAge < 30_000;
     const uptime =
-      runtime?.startedAt && serviceState === "running"
+      runtime?.startedAt && runtimeFresh
         ? formatDuration(Date.now() - new Date(runtime.startedAt).getTime())
         : "n/a";
     console.log(`Service: ${serviceState} (uptime ${uptime})`);
+    const gatewayStatus =
+      serviceState !== "running"
+        ? "disconnected"
+        : !runtimeFresh
+          ? "unknown — runtime heartbeat is stale"
+          : runtime.gateway?.connected
+            ? `connected, ${runtime.gateway.ping ?? -1} ms`
+            : "disconnected";
     console.log(
-      `Discord Gateway: ${runtime?.gateway?.connected ? `connected, ${runtime.gateway.ping ?? -1} ms` : "disconnected"}`
+      `Discord Gateway: ${gatewayStatus}`
     );
     const sqlite = db.health();
     console.log(`SQLite: ${sqlite.ok ? "healthy" : "unhealthy"} — ${sqlite.detail}`);

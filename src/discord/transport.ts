@@ -32,6 +32,7 @@ export function requiredLobbyPermissions(lobbyType?: number): string[] {
       : "CreatePrivateThreads",
     "ManageThreads",
     "AttachFiles",
+    "SendVoiceMessages",
     "ReadMessageHistory"
   ];
 }

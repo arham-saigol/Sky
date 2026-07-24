@@ -105,6 +105,7 @@ export class DpapiSecretStore implements SecretStore {
     ].join(";");
     const encrypted = await powershell(script, JSON.stringify(clean));
     await mkdir(this.home, { recursive: true });
+    await restrictWindowsAcl(this.home, true);
     await atomicWriteText(this.file, encrypted.toString("utf8"));
     await restrictWindowsAcl(this.file);
   }
