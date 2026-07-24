@@ -218,5 +218,5 @@ async function main(): Promise<void> {
 
 void main().catch((error) => {
   process.stderr.write(`Sky failed to start: ${safeErrorMessage(error)}\n`);
-  process.exitCode = 1;
+  process.exit(1);
 });
