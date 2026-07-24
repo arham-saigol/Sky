@@ -357,14 +357,24 @@ export class CharacterFiles {
 
   public async deleteFiles(character: CharacterRow): Promise<void> {
     await this.mutex.runExclusive(character.id, async () => {
+      const directory = path.dirname(character.soul_path);
       const attachmentPaths = this.db.attachmentPathsForCharacter(character.id);
+      const journals = (await readdir(directory).catch(
+        (error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return [];
+          throw error;
+        }
+      ))
+        .filter((name) => /^\.curation-.+\.journal\.json$/.test(name))
+        .map((name) => path.join(directory, name));
       await Promise.all([
         unlinkIfPresent(character.soul_path),
         unlinkIfPresent(character.memory_path),
-        ...attachmentPaths.map((file) => unlinkIfPresent(file))
+        ...attachmentPaths.map((file) => unlinkIfPresent(file)),
+        ...journals.map((file) => unlinkIfPresent(file))
       ]);
+      await rmdirIfPresent(directory);
       this.db.permanentlyDeleteCharacter(character.id);
-      await rmdir(path.dirname(character.soul_path)).catch(() => undefined);
     });
   }
 

@@ -279,6 +279,11 @@ describe("character Markdown durability", () => {
       lobbyChannelId: "lobby"
     });
     db.markSessionEnded(session.id);
+    const journalPath = path.join(
+      path.dirname(character.soul_path),
+      ".curation-orphan.journal.json"
+    );
+    await writeFile(journalPath, "sensitive journal");
     await files.deleteFiles(character);
     expect(db.getCharacterById(character.id)).toBeUndefined();
     expect(
@@ -290,6 +295,8 @@ describe("character Markdown durability", () => {
     ).toBe(0);
     await expect(access(character.soul_path)).rejects.toThrow();
     await expect(access(character.memory_path)).rejects.toThrow();
+    await expect(access(journalPath)).rejects.toThrow();
+    await expect(access(path.dirname(character.soul_path))).rejects.toThrow();
     db.close();
   });
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ChannelType } from "discord.js";
+import { paginateCharacterLines } from "../src/discord/bot.js";
 import { requiredLobbyPermissions } from "../src/discord/transport.js";
 import { parseExpression } from "../src/prompts.js";
 import { redact, redactUnknown } from "../src/redaction.js";
@@ -51,5 +52,18 @@ describe("Discord lobby permissions", () => {
     expect(requiredLobbyPermissions(ChannelType.GuildText)).toContain(
       "CreatePrivateThreads"
     );
+  });
+
+  it("paginates character listings within Discord's message limit", () => {
+    const pages = paginateCharacterLines(
+      ["first character", "second character", "third character"],
+      30
+    );
+    expect(pages).toEqual([
+      "first character",
+      "second character",
+      "third character"
+    ]);
+    expect(pages.every((page) => page.length <= 30)).toBe(true);
   });
 });

@@ -113,6 +113,18 @@ export async function runDoctor(options: {
   } catch (error) {
     push(checks, "Data location", false, safeErrorMessage(error));
   }
+  const dataAcl = await runProcess("icacls.exe", [config.dataDir]);
+  const dataAclBroad = /\bEveryone:|\bUsers:/i.test(dataAcl.stdout);
+  push(
+    checks,
+    "Data directory ACL",
+    dataAcl.code === 0 && !dataAclBroad,
+    dataAcl.code !== 0
+      ? "Could not inspect the data directory ACL"
+      : dataAclBroad
+        ? "Data ACL is broad; rerun `sky setup` from an elevated terminal"
+        : "Restricted ACL readable by owner, SYSTEM and Administrators"
+  );
 
   let db: SkyDatabase | undefined;
   try {

@@ -33,6 +33,7 @@ async function powershell(script: string, stdin: string): Promise<Buffer> {
     child.stdout.on("data", (value: Buffer) => stdout.push(value));
     child.stderr.on("data", (value: Buffer) => stderr.push(value));
     child.on("error", reject);
+    child.stdin.on("error", reject);
     child.on("close", (code) => {
       if (code === 0) resolve(Buffer.concat(stdout));
       else
@@ -45,6 +46,37 @@ async function powershell(script: string, stdin: string): Promise<Buffer> {
     });
     child.stdin.end(stdin, "utf8");
   });
+}
+
+export async function restrictWindowsAcl(
+  target: string,
+  directory = false
+): Promise<void> {
+  if (process.platform !== "win32") {
+    throw new SkyError(
+      "Windows ACL protection is available only on Windows",
+      "WINDOWS_REQUIRED"
+    );
+  }
+  const escaped = target.replaceAll("'", "''");
+  const inheritance = directory
+    ? "[System.Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'"
+    : "[System.Security.AccessControl.InheritanceFlags]::None";
+  const script = [
+    "$ErrorActionPreference='Stop'",
+    `$target='${escaped}'`,
+    "$acl=Get-Acl -LiteralPath $target",
+    "$acl.SetAccessRuleProtection($true,$false)",
+    "$acl.Access | ForEach-Object { [void]$acl.RemoveAccessRule($_) }",
+    "$rights=[System.Security.AccessControl.FileSystemRights]::FullControl",
+    `$inherit=${inheritance}`,
+    "$prop=[System.Security.AccessControl.PropagationFlags]::None",
+    "$allow=[System.Security.AccessControl.AccessControlType]::Allow",
+    "$ids=@([System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value,'S-1-5-18','S-1-5-32-544')",
+    "foreach($id in $ids){$sid=New-Object System.Security.Principal.SecurityIdentifier($id);$rule=New-Object System.Security.AccessControl.FileSystemAccessRule($sid,$rights,$inherit,$prop,$allow);$acl.AddAccessRule($rule)}",
+    "Set-Acl -LiteralPath $target -AclObject $acl"
+  ].join(";");
+  await powershell(script, "");
 }
 
 export class DpapiSecretStore implements SecretStore {
@@ -74,7 +106,7 @@ export class DpapiSecretStore implements SecretStore {
     const encrypted = await powershell(script, JSON.stringify(clean));
     await mkdir(this.home, { recursive: true });
     await atomicWriteText(this.file, encrypted.toString("utf8"));
-    await this.restrictAcl();
+    await restrictWindowsAcl(this.file);
   }
 
   public async load(): Promise<SkySecrets> {
@@ -100,25 +132,6 @@ export class DpapiSecretStore implements SecretStore {
 
   public async check(): Promise<void> {
     await this.load();
-  }
-
-  private async restrictAcl(): Promise<void> {
-    const escaped = this.file.replaceAll("'", "''");
-    const script = [
-      "$ErrorActionPreference='Stop'",
-      `$file='${escaped}'`,
-      "$acl=Get-Acl -LiteralPath $file",
-      "$acl.SetAccessRuleProtection($true,$false)",
-      "$acl.Access | ForEach-Object { [void]$acl.RemoveAccessRule($_) }",
-      "$rights=[System.Security.AccessControl.FileSystemRights]::FullControl",
-      "$inherit=[System.Security.AccessControl.InheritanceFlags]::None",
-      "$prop=[System.Security.AccessControl.PropagationFlags]::None",
-      "$allow=[System.Security.AccessControl.AccessControlType]::Allow",
-      "$ids=@([System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value,'S-1-5-18','S-1-5-32-544')",
-      "foreach($id in $ids){$sid=New-Object System.Security.Principal.SecurityIdentifier($id);$rule=New-Object System.Security.AccessControl.FileSystemAccessRule($sid,$rights,$inherit,$prop,$allow);$acl.AddAccessRule($rule)}",
-      "Set-Acl -LiteralPath $file -AclObject $acl"
-    ].join(";");
-    await powershell(script, "");
   }
 }
 

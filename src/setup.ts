@@ -26,7 +26,10 @@ import { createLogger } from "./logger.js";
 import { CartesiaTts } from "./providers/cartesia.js";
 import { GroqTranscriber } from "./providers/groq.js";
 import { OpenCodeProvider } from "./providers/opencode.js";
-import { DpapiSecretStore } from "./secrets.js";
+import {
+  DpapiSecretStore,
+  restrictWindowsAcl
+} from "./secrets.js";
 import { runProcess } from "./windows/process.js";
 import { WindowsServiceManager } from "./windows/service-manager.js";
 
@@ -194,6 +197,7 @@ export async function runSetup(home: string): Promise<void> {
       : {})
   };
   await mkdir(dataDir, { recursive: true });
+  await restrictWindowsAcl(dataDir, true);
 
   let ffmpeg = await detectFfmpeg();
   if (!ffmpeg.ok) {

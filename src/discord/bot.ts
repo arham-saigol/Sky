@@ -32,6 +32,23 @@ import type { OpenCodeProvider } from "../providers/opencode.js";
 import type { InboundVoiceAttachment, RoleplayEngine } from "../roleplay.js";
 import { DiscordTransport } from "./transport.js";
 
+export function paginateCharacterLines(
+  lines: string[],
+  maxLength = 2_000
+): string[] {
+  const pages: string[] = [];
+  let page = "";
+  for (const line of lines) {
+    if (page && page.length + 1 + line.length > maxLength) {
+      pages.push(page);
+      page = "";
+    }
+    page = page ? `${page}\n${line}` : line;
+  }
+  if (page) pages.push(page);
+  return pages;
+}
+
 export class SkyDiscordBot {
   private readonly pendingCharacterNames = new Map<string, string>();
 
@@ -233,14 +250,23 @@ export class SkyDiscordBot {
     const subcommand = interaction.options.getSubcommand();
     if (subcommand === "list") {
       const characters = this.db.listCharacters();
+      const pages = characters.length
+        ? paginateCharacterLines(
+            characters.map(
+              (character) => `• **${character.name}** — ${character.voice}`
+            )
+          )
+        : ["No characters exist yet."];
       await interaction.reply({
-        content: characters.length
-          ? characters
-              .map((character) => `• **${character.name}** — ${character.voice}`)
-              .join("\n")
-          : "No characters exist yet.",
+        content: pages[0]!,
         flags: MessageFlags.Ephemeral
       });
+      for (const page of pages.slice(1)) {
+        await interaction.followUp({
+          content: page,
+          flags: MessageFlags.Ephemeral
+        });
+      }
       return;
     }
     const name = interaction.options.getString("name", true).trim();
