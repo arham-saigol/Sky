@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CharacterFiles } from "../src/characters.js";
 import { CurationScheduler } from "../src/curation.js";
 import { SkyDatabase } from "../src/db.js";
+import { KeyedMutex } from "../src/util/mutex.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -123,6 +124,84 @@ describe("dreamer and curator", () => {
     });
     expect(db.pendingCurationCount()).toBe(1);
     expect(archiver.archiveAndLockThread).not.toHaveBeenCalled();
+    db.close();
+  });
+
+  it("waits for in-flight thread work before snapshotting /end", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "sky-curate-"));
+    roots.push(root);
+    const db = new SkyDatabase(path.join(root, "sky.sqlite"));
+    const characters = new CharacterFiles(db, path.join(root, "characters"));
+    await characters.initialize();
+    const character = await characters.create({
+      name: "Mara",
+      identity: "A 29-year-old fictional adult.",
+      personality: "Careful.",
+      appearance: "An adult woman.",
+      settingAndBoundaries: "Fictional, consensual.",
+      voice: "Katie"
+    });
+    const session = db.createSession({
+      characterId: character.id,
+      threadId: "thread-locked",
+      guildId: "guild",
+      lobbyChannelId: "lobby"
+    });
+    const mutex = new KeyedMutex();
+    let releaseWork: (() => void) | undefined;
+    const workMayFinish = new Promise<void>((resolve) => {
+      releaseWork = resolve;
+    });
+    const inFlight = mutex.runExclusive(session.thread_id, async () => {
+      await workMayFinish;
+      db.appendMessage({
+        sessionId: session.id,
+        discordMessageId: "owner-in-flight",
+        role: "owner",
+        content: "Last question.",
+        source: "text"
+      });
+      db.appendMessage({
+        sessionId: session.id,
+        discordMessageId: "assistant-in-flight",
+        role: "assistant",
+        content: "Last answer.",
+        source: "text",
+        triggeringDiscordMessageId: "owner-in-flight"
+      });
+    });
+    const currentSoul = await readFile(character.soul_path, "utf8");
+    const provider = {
+      curate: vi.fn().mockResolvedValue(
+        JSON.stringify({
+          soul_markdown: currentSoul,
+          memory_markdown: "# Persistent memory\n\nLast answer retained.\n",
+          summary: "Retained the final turn."
+        })
+      )
+    };
+    const scheduler = new CurationScheduler(
+      db,
+      characters,
+      provider as never,
+      { archiveAndLockThread: vi.fn().mockResolvedValue(undefined) },
+      pino({ enabled: false }),
+      1_000_000,
+      mutex
+    );
+    const ending = scheduler.endSession(session.id);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(db.getSession(session.id)?.state).toBe("active");
+    expect(provider.curate).not.toHaveBeenCalled();
+    releaseWork?.();
+    await inFlight;
+    await ending;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (provider.curate.mock.calls.length > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(provider.curate.mock.calls[0]?.[1]).toContain("Last answer.");
+    await scheduler.stop();
     db.close();
   });
 });

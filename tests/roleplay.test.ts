@@ -130,4 +130,94 @@ describe("roleplay authorization and idempotency", () => {
     ]);
     db.close();
   });
+
+  it("serializes owner persistence with prompt generation per thread", async () => {
+    const { root, db, characters } = await fixture();
+    let releaseFirst: ((value: {
+      content: string;
+      actualModel: string;
+      fellBack: boolean;
+    }) => void) | undefined;
+    const firstResult = new Promise<{
+      content: string;
+      actualModel: string;
+      fellBack: boolean;
+    }>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const openCode = {
+      roleplay: vi
+        .fn()
+        .mockImplementationOnce(() => firstResult)
+        .mockResolvedValueOnce({
+          content: "Second reply.",
+          actualModel: "deepseek-v4-pro",
+          fellBack: false
+        })
+    };
+    let response = 0;
+    const sender = {
+      sendText: vi.fn().mockImplementation(async () => `assistant-${++response}`),
+      sendVoice: vi.fn()
+    };
+    const engine = new RoleplayEngine(
+      "owner",
+      "guild",
+      root,
+      db,
+      characters,
+      openCode as never,
+      { transcribe: vi.fn() } as never,
+      { synthesize: vi.fn() } as never,
+      sender as never,
+      pino({ enabled: false })
+    );
+    const first = engine.handle({
+      eventId: "owner-1",
+      authorId: "owner",
+      guildId: "guild",
+      threadId: "thread",
+      content: "First message",
+      createdAt: "2026-01-01T00:00:00.000Z"
+    });
+    while (openCode.roleplay.mock.calls.length === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    const second = engine.handle({
+      eventId: "owner-2",
+      authorId: "owner",
+      guildId: "guild",
+      threadId: "thread",
+      content: "Second message",
+      createdAt: "2026-01-01T00:00:01.000Z"
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(openCode.roleplay).toHaveBeenCalledTimes(1);
+    expect(
+      db.raw.prepare("SELECT role, content FROM messages ORDER BY id").all()
+    ).toEqual([{ role: "owner", content: "First message" }]);
+    releaseFirst?.({
+      content: "First reply.",
+      actualModel: "deepseek-v4-pro",
+      fellBack: false
+    });
+    await Promise.all([first, second]);
+    expect(openCode.roleplay.mock.calls[0]?.[1].messages).toEqual([
+      { role: "user", content: "First message" }
+    ]);
+    expect(openCode.roleplay.mock.calls[1]?.[1].messages).toEqual([
+      { role: "user", content: "First message" },
+      { role: "assistant", content: "First reply." },
+      { role: "user", content: "Second message" }
+    ]);
+    expect(
+      db.raw.prepare("SELECT role, content FROM messages ORDER BY id").all()
+    ).toEqual([
+      { role: "owner", content: "First message" },
+      { role: "assistant", content: "First reply." },
+      { role: "owner", content: "Second message" },
+      { role: "assistant", content: "Second reply." }
+    ]);
+    db.close();
+  });
 });

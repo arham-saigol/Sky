@@ -8,6 +8,7 @@ import {
   buildCuratorInput,
   CURATOR_SYSTEM
 } from "./prompts.js";
+import { KeyedMutex } from "./util/mutex.js";
 
 const CuratorResponseSchema = z
   .object({
@@ -31,7 +32,8 @@ export class CurationScheduler {
     private readonly provider: Pick<OpenCodeProvider, "curate">,
     private readonly archiver: ThreadArchiver,
     private readonly logger: Logger,
-    private readonly intervalMs = 15_000
+    private readonly intervalMs = 15_000,
+    private readonly sessions = new KeyedMutex()
   ) {}
 
   public start(): void {
@@ -58,23 +60,27 @@ export class CurationScheduler {
   }> {
     const before = this.db.getSession(sessionId);
     if (!before) throw new Error("Session not found");
-    if (before.state === "ended") {
-      return { alreadyEnded: true, queued: false };
-    }
-    this.db.beginEndSession(sessionId);
-    this.db.expediteCurationForEnd(sessionId);
-    const job = this.db.createCurationJob(sessionId, "end");
-    if (!job) {
-      if (this.db.pendingCurationCountForSession(sessionId) > 0) {
-        void this.tick();
-        return { alreadyEnded: before.state === "ending", queued: true };
+    return await this.sessions.runExclusive(before.thread_id, async () => {
+      const current = this.db.getSession(sessionId);
+      if (!current) throw new Error("Session not found");
+      if (current.state === "ended") {
+        return { alreadyEnded: true, queued: false };
       }
-      this.db.markSessionEnded(sessionId);
-      await this.tryArchive(sessionId);
-      return { alreadyEnded: false, queued: false };
-    }
-    void this.tick();
-    return { alreadyEnded: before.state === "ending", queued: true };
+      this.db.beginEndSession(sessionId);
+      this.db.expediteCurationForEnd(sessionId);
+      const job = this.db.createCurationJob(sessionId, "end");
+      if (!job) {
+        if (this.db.pendingCurationCountForSession(sessionId) > 0) {
+          void this.tick();
+          return { alreadyEnded: current.state === "ending", queued: true };
+        }
+        this.db.markSessionEnded(sessionId);
+        await this.tryArchive(sessionId);
+        return { alreadyEnded: false, queued: false };
+      }
+      void this.tick();
+      return { alreadyEnded: current.state === "ending", queued: true };
+    });
   }
 
   public async tick(): Promise<void> {
@@ -128,6 +134,7 @@ export class CurationScheduler {
         memory: parsed.memory_markdown
       });
       const updated = this.db.completeCurationJob(job);
+      await this.characters.finalizeCuration(character, job);
       this.logger.info(
         {
           jobId: job.id,

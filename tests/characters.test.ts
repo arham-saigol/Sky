@@ -83,6 +83,10 @@ describe("character Markdown durability", () => {
         memory: "# Persistent memory\n\nSecond durable memory.\n"
       })
     ]);
+    await Promise.all([
+      files.finalizeCuration(character, first),
+      files.finalizeCuration(character, second)
+    ]);
     const final = await files.read(character);
     expect(["First durable memory.", "Second durable memory."]).toContain(
       final.memory.match(/(?:First|Second) durable memory\./)?.[0]
@@ -99,6 +103,57 @@ describe("character Markdown durability", () => {
       )
     ).toBe(false);
     db.close();
+  });
+
+  it("recovers an applied curation journal without invoking the curator again", async () => {
+    const { root, db, files, character } = await fixture();
+    const session = db.createSession({
+      characterId: character.id,
+      threadId: "thread-recover-curation",
+      guildId: "guild",
+      lobbyChannelId: "lobby"
+    });
+    db.appendMessage({
+      sessionId: session.id,
+      discordMessageId: "message-recover-curation",
+      role: "owner",
+      content: "Remember the lighthouse.",
+      source: "text"
+    });
+    db.beginEndSession(session.id);
+    const job = db.createCurationJob(session.id, "end")!;
+    const claimed = db.claimDueCurationJob("2030-01-01T00:00:00.000Z")!;
+    expect(claimed.id).toBe(job.id);
+    const soul = (await files.read(character)).soul;
+    await files.applyCuration(character, claimed, {
+      soul,
+      memory: "# Persistent memory\n\n- The owner remembers the lighthouse.\n"
+    });
+    const databasePath = db.raw.name;
+    db.close();
+
+    const reopened = new SkyDatabase(databasePath);
+    const recoveredFiles = new CharacterFiles(
+      reopened,
+      path.join(root, "characters")
+    );
+    await recoveredFiles.initialize();
+    expect(reopened.getCurationJob(job.id)?.state).toBe("succeeded");
+    expect(reopened.getSession(session.id)).toMatchObject({
+      state: "ended",
+      curation_watermark_id: job.to_message_id
+    });
+    expect(await readFile(character.memory_path, "utf8")).toContain(
+      "lighthouse"
+    );
+    expect(
+      (await readdir(path.dirname(character.soul_path))).some((name) =>
+        name.includes("journal")
+      )
+    ).toBe(false);
+    reopened.recoverInterruptedWork();
+    expect(reopened.getCurationJob(job.id)?.state).toBe("succeeded");
+    reopened.close();
   });
 
   it("rejects curator attempts to change stable identity", async () => {

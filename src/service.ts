@@ -15,6 +15,7 @@ import { GroqTranscriber } from "./providers/groq.js";
 import { OpenCodeProvider } from "./providers/opencode.js";
 import { RoleplayEngine } from "./roleplay.js";
 import { DpapiSecretStore } from "./secrets.js";
+import { KeyedMutex } from "./util/mutex.js";
 
 async function main(): Promise<void> {
   const home = skyHome();
@@ -36,6 +37,7 @@ async function main(): Promise<void> {
     secrets.cartesiaBackupApiKey
   );
   const transport = new DiscordTransport(config, secrets, logger);
+  const sessionMutex = new KeyedMutex();
   const roleplay = new RoleplayEngine(
     config.discordOwnerUserId,
     config.discordGuildId,
@@ -47,14 +49,17 @@ async function main(): Promise<void> {
     cartesia,
     transport,
     logger,
-    ffmpeg.path
+    ffmpeg.path,
+    sessionMutex
   );
   const curation = new CurationScheduler(
     db,
     characters,
     openCode,
     transport,
-    logger
+    logger,
+    15_000,
+    sessionMutex
   );
   const bot = new SkyDiscordBot(
     config,

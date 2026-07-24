@@ -889,6 +889,12 @@ export class SkyDatabase {
     })();
   }
 
+  public getCurationJob(id: string): CurationJobRow | undefined {
+    return this.raw
+      .prepare("SELECT * FROM curation_jobs WHERE id = ?")
+      .get(id) as CurationJobRow | undefined;
+  }
+
   public recoverInterruptedWork(): void {
     const timestamp = now();
     this.raw
@@ -952,7 +958,7 @@ export class SkyDatabase {
       .prepare(
         `UPDATE curation_jobs
          SET state = 'failed', last_error = ?, next_attempt_at = ?, updated_at = ?
-         WHERE id = ?`
+         WHERE id = ? AND state != 'succeeded'`
       )
       .run(safeError.slice(0, 500), next, now(), job.id);
   }

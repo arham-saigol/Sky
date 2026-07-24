@@ -41,7 +41,6 @@ export interface RoleplayDiscordSender {
 }
 
 export class RoleplayEngine {
-  private readonly threads = new KeyedMutex();
   private accepting = true;
   private active = 0;
 
@@ -56,7 +55,8 @@ export class RoleplayEngine {
     private readonly cartesia: Pick<CartesiaTts, "synthesize">,
     private readonly sender: RoleplayDiscordSender,
     private readonly logger: Logger,
-    private readonly ffmpegPath?: string
+    private readonly ffmpegPath?: string,
+    private readonly threads = new KeyedMutex()
   ) {}
 
   public async handle(message: InboundRoleplayMessage): Promise<void> {
@@ -84,43 +84,50 @@ export class RoleplayEngine {
   private async handleAuthorized(
     message: InboundRoleplayMessage
   ): Promise<void> {
-    const session = this.db.getSessionByThread(message.threadId);
-    if (!session) return;
+    if (!this.db.getSessionByThread(message.threadId)) return;
     if (!this.db.claimEvent(message.eventId, "MESSAGE_CREATE")) return;
     try {
-      if (session.state !== "active" || session.accepting_messages !== 1) {
-        await this.sender.sendText(
-          message.threadId,
-          "This session has ended and no longer accepts roleplay messages.",
-          message.eventId
+      await this.threads.runExclusive(message.threadId, async () => {
+        const session = this.db.getSessionByThread(message.threadId);
+        if (!session) return;
+        if (session.state !== "active" || session.accepting_messages !== 1) {
+          await this.sender.sendText(
+            message.threadId,
+            "This session has ended and no longer accepts roleplay messages.",
+            message.eventId
+          );
+          this.db.completeEvent(message.eventId);
+          return;
+        }
+        let content = message.content.trim();
+        let source: "text" | "voice" = "text";
+        if (message.voice) {
+          source = "voice";
+          content = await this.transcribeVoice(
+            message,
+            message.voice,
+            session.id
+          );
+        }
+        if (!content) {
+          this.db.completeEvent(message.eventId);
+          return;
+        }
+        const appended = this.db.appendMessage({
+          sessionId: session.id,
+          discordMessageId: message.eventId,
+          role: "owner",
+          content,
+          source,
+          createdAt: message.createdAt
+        });
+        await this.processTriggerLocked(
+          session.id,
+          appended.row.discord_message_id,
+          source
         );
         this.db.completeEvent(message.eventId);
-        return;
-      }
-      let content = message.content.trim();
-      let source: "text" | "voice" = "text";
-      if (message.voice) {
-        source = "voice";
-        content = await this.transcribeVoice(
-          message,
-          message.voice,
-          session.id
-        );
-      }
-      if (!content) {
-        this.db.completeEvent(message.eventId);
-        return;
-      }
-      const appended = this.db.appendMessage({
-        sessionId: session.id,
-        discordMessageId: message.eventId,
-        role: "owner",
-        content,
-        source,
-        createdAt: message.createdAt
       });
-      await this.processTrigger(session.id, appended.row.discord_message_id, source);
-      this.db.completeEvent(message.eventId);
     } catch (error) {
       const safe = safeErrorMessage(error);
       this.db.failEvent(message.eventId, safe);
@@ -264,83 +271,91 @@ export class RoleplayEngine {
     const initial = this.db.getSession(sessionId);
     if (!initial) return;
     await this.threads.runExclusive(initial.thread_id, async () => {
-      const session = this.db.getSession(sessionId);
-      if (!session || session.state !== "active") return;
-      const spokenRequested =
-        session.speak_mode === "on" ||
-        (session.speak_mode === "mirror" && ownerSource === "voice");
-      const spoken = spokenRequested && Boolean(this.ffmpegPath);
-      const outbound = this.db.beginOutbound(triggerId, sessionId, spoken);
-      if (!outbound.claimed) return;
-      try {
-        let content = outbound.existing?.clean_content ?? undefined;
-        let expression = outbound.existing?.expression as Expression | undefined;
-        if (!content) {
-          const character = this.db.getCharacterById(session.character_id);
-          if (!character) {
-            throw new SkyError(
-              "The bound character no longer exists",
-              "CHARACTER_DELETED"
-            );
-          }
-          const files = await this.characters.read(character);
-          const prompt = buildRoleplayPrompt({
-            ...files,
-            recent: this.db.recentMessages(session.id, MAX_RECENT_MESSAGES),
-            spoken
-          });
-          const result = await this.openCode.roleplay(
-            session.model_id,
-            prompt,
-            session.reasoning_mode
-          );
-          const visible = parseExpression(result.content, spoken);
-          content = visible.content;
-          expression = visible.expression;
-          if (!content) {
-            throw new SkyError(
-              "The roleplay model returned an empty response",
-              "EMPTY_RESPONSE",
-              true
-            );
-          }
-          this.db.markOutboundGenerated(triggerId, content, expression);
-          if (result.fellBack) {
-            this.logger.warn(
-              {
-                threadId: session.thread_id,
-                requestedModel: session.model_id,
-                actualModel: result.actualModel
-              },
-              "Roleplay model used automatic Hy3 fallback"
-            );
-          }
-        }
-        const responseId = await this.deliver(
-          session,
-          triggerId,
-          content,
-          expression,
-          spokenRequested
-        );
-        const assistant = this.db.appendMessage({
-          sessionId: session.id,
-          discordMessageId: responseId,
-          role: "assistant",
-          content,
-          source: spoken ? "voice" : "text",
-          triggeringDiscordMessageId: triggerId
-        });
-        this.db.markOutboundSent({
-          triggerId,
-          responseDiscordId: responseId,
-          assistantRowId: assistant.row.id
-        });
-      } catch (error) {
-        this.db.failOutbound(triggerId, safeErrorMessage(error));
-        throw error;
-      }
+      await this.processTriggerLocked(sessionId, triggerId, ownerSource);
     });
+  }
+
+  private async processTriggerLocked(
+    sessionId: string,
+    triggerId: string,
+    ownerSource: "text" | "voice"
+  ): Promise<void> {
+    const session = this.db.getSession(sessionId);
+    if (!session || session.state !== "active") return;
+    const spokenRequested =
+      session.speak_mode === "on" ||
+      (session.speak_mode === "mirror" && ownerSource === "voice");
+    const spoken = spokenRequested && Boolean(this.ffmpegPath);
+    const outbound = this.db.beginOutbound(triggerId, sessionId, spoken);
+    if (!outbound.claimed) return;
+    try {
+      let content = outbound.existing?.clean_content ?? undefined;
+      let expression = outbound.existing?.expression as Expression | undefined;
+      if (!content) {
+        const character = this.db.getCharacterById(session.character_id);
+        if (!character) {
+          throw new SkyError(
+            "The bound character no longer exists",
+            "CHARACTER_DELETED"
+          );
+        }
+        const files = await this.characters.read(character);
+        const prompt = buildRoleplayPrompt({
+          ...files,
+          recent: this.db.recentMessages(session.id, MAX_RECENT_MESSAGES),
+          spoken
+        });
+        const result = await this.openCode.roleplay(
+          session.model_id,
+          prompt,
+          session.reasoning_mode
+        );
+        const visible = parseExpression(result.content, spoken);
+        content = visible.content;
+        expression = visible.expression;
+        if (!content) {
+          throw new SkyError(
+            "The roleplay model returned an empty response",
+            "EMPTY_RESPONSE",
+            true
+          );
+        }
+        this.db.markOutboundGenerated(triggerId, content, expression);
+        if (result.fellBack) {
+          this.logger.warn(
+            {
+              threadId: session.thread_id,
+              requestedModel: session.model_id,
+              actualModel: result.actualModel
+            },
+            "Roleplay model used automatic Hy3 fallback"
+          );
+        }
+      }
+      const responseId = await this.deliver(
+        session,
+        triggerId,
+        content,
+        expression,
+        spokenRequested
+      );
+      const assistant = this.db.appendMessage({
+        sessionId: session.id,
+        discordMessageId: responseId,
+        role: "assistant",
+        content,
+        source: spoken ? "voice" : "text",
+        triggeringDiscordMessageId: triggerId
+      });
+      this.db.markOutboundSent({
+        triggerId,
+        responseDiscordId: responseId,
+        assistantRowId: assistant.row.id
+      });
+    } catch (error) {
+      this.db.failOutbound(triggerId, safeErrorMessage(error));
+      throw error;
+    }
   }
 
   private async deliver(

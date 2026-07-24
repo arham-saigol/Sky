@@ -288,10 +288,22 @@ export class CharacterFiles {
             });
           }
         })();
-        await unlink(journalPath);
       } finally {
         await release();
       }
+    });
+  }
+
+  public async finalizeCuration(
+    character: CharacterRow,
+    job: CurationJobRow
+  ): Promise<void> {
+    const journalPath = path.join(
+      path.dirname(character.soul_path),
+      `.curation-${job.id}.journal.json`
+    );
+    await unlink(journalPath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error;
     });
   }
 
@@ -383,7 +395,15 @@ export class CharacterFiles {
             await readFile(journalPath, "utf8")
           ) as CurationJournal;
           const character = this.db.getCharacterById(journal.characterId);
-          if (!character || journal.version !== 1) continue;
+          const job = this.db.getCurationJob(journal.jobId);
+          if (
+            !character ||
+            !job ||
+            job.character_id !== character.id ||
+            journal.version !== 1
+          ) {
+            continue;
+          }
           this.validateMarkdown("SOUL", journal.soul, character.name);
           this.validateMarkdown("MEMORY", journal.memory, character.name);
           await atomicWriteText(character.soul_path, journal.soul);
@@ -408,6 +428,7 @@ export class CharacterFiles {
               }
             }
           })();
+          this.db.completeCurationJob(job);
           await unlink(journalPath);
         } catch {
           // Keep malformed journals for doctor/manual recovery.
