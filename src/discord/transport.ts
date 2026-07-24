@@ -139,7 +139,7 @@ export class DiscordTransport {
         name,
         type: ChannelType.PrivateThread,
         invitable: false,
-        autoArchiveDuration: ThreadAutoArchiveDuration.OneWeek,
+        autoArchiveDuration: ThreadAutoArchiveDuration.OneDay,
         reason: `Sky session for ${characterName}`
       });
       try {

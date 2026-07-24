@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   MAX_CURATION_MESSAGES,
   MAX_CURATION_TRANSCRIPT_BYTES,
+  MAX_PERSISTED_MESSAGE_BYTES,
   SkyDatabase
 } from "../src/db.js";
 
@@ -393,12 +394,12 @@ describe("SQLite persistence and recovery", () => {
       guildId: "guild",
       lobbyChannelId: "lobby"
     });
-    for (let index = 0; index < 2; index++) {
+    for (let index = 0; index < 3; index++) {
       db.appendMessage({
         sessionId: byteSession.id,
         discordMessageId: `byte-bounded-${index}`,
-        role: index === 0 ? "owner" : "assistant",
-        content: "x".repeat(MAX_CURATION_TRANSCRIPT_BYTES / 2 + 1),
+        role: index % 2 === 0 ? "owner" : "assistant",
+        content: "x".repeat(20_000),
         source: "text"
       });
     }
@@ -409,7 +410,16 @@ describe("SQLite persistence and recovery", () => {
         byteBounded.from_message_id,
         byteBounded.to_message_id
       )
-    ).toHaveLength(1);
+    ).toHaveLength(2);
+    expect(() =>
+      db.appendMessage({
+        sessionId: byteSession.id,
+        discordMessageId: "oversized-single-message",
+        role: "owner",
+        content: "x".repeat(MAX_PERSISTED_MESSAGE_BYTES + 1),
+        source: "voice"
+      })
+    ).toThrow("persistence limit");
 
     const pairedSession = db.createSession({
       characterId: character.id,
@@ -436,14 +446,14 @@ describe("SQLite persistence and recovery", () => {
       sessionId: pairedSession.id,
       discordMessageId: "pair-large-owner",
       role: "owner",
-      content: "o".repeat(30_000),
+      content: "o".repeat(MAX_PERSISTED_MESSAGE_BYTES),
       source: "text"
     });
     db.appendMessage({
       sessionId: pairedSession.id,
       discordMessageId: "pair-large-assistant",
       role: "assistant",
-      content: "a".repeat(30_000),
+      content: "a".repeat(MAX_PERSISTED_MESSAGE_BYTES),
       source: "text",
       triggeringDiscordMessageId: "pair-large-owner"
     });

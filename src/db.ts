@@ -88,6 +88,8 @@ export interface NewSession {
 
 export const MAX_CURATION_MESSAGES = 20;
 export const MAX_CURATION_TRANSCRIPT_BYTES = 48 * 1024;
+export const MAX_PERSISTED_MESSAGE_BYTES =
+  Math.floor(MAX_CURATION_TRANSCRIPT_BYTES / 2) - 16;
 
 function now(): string {
   return new Date().toISOString();
@@ -462,6 +464,14 @@ export class SkyDatabase {
     triggeringDiscordMessageId?: string;
     createdAt?: string;
   }): { inserted: boolean; row: MessageRow } {
+    if (
+      Buffer.byteLength(input.content, "utf8") >
+      MAX_PERSISTED_MESSAGE_BYTES
+    ) {
+      throw new Error(
+        `Message content exceeds the ${MAX_PERSISTED_MESSAGE_BYTES}-byte persistence limit`
+      );
+    }
     const timestamp = input.createdAt ?? now();
     const result = this.raw.transaction(() => {
       const write = this.raw
@@ -922,7 +932,6 @@ export class SkyDatabase {
         );
         const overCount = messages.length >= MAX_CURATION_MESSAGES;
         const overBytes =
-          messages.length > 0 &&
           transcriptBytes + messageBytes > MAX_CURATION_TRANSCRIPT_BYTES;
         if (overCount || overBytes) {
           const previous = messages.at(-1);
@@ -933,10 +942,17 @@ export class SkyDatabase {
               previous.discord_message_id
           ) {
             if (messages.length === 1) {
-              messages.push(message);
+              throw new Error(
+                "A persisted roleplay turn exceeds the curation transcript limit"
+              );
             } else {
               messages.pop();
             }
+          }
+          if (messages.length === 0) {
+            throw new Error(
+              "A persisted message exceeds the curation transcript limit"
+            );
           }
           break;
         }
