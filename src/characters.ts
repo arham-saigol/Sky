@@ -141,28 +141,29 @@ export class CharacterFiles {
     await atomicWriteText(soulPath, soul);
     await atomicWriteText(memoryPath, memory);
     try {
-      const character = this.db.createCharacter({
-        name,
-        slug,
-        soulPath,
-        memoryPath,
-        voice: definition.voice
-      });
-      this.db.raw.transaction(() => {
+      const character = this.db.raw.transaction(() => {
+        const created = this.db.createCharacter({
+          name,
+          slug,
+          soulPath,
+          memoryPath,
+          voice: definition.voice
+        });
         this.db.recordRevision({
-          characterId: character.id,
+          characterId: created.id,
           kind: "SOUL",
           sha256: sha256(soul),
           content: soul,
           source: "create"
         });
         this.db.recordRevision({
-          characterId: character.id,
+          characterId: created.id,
           kind: "MEMORY",
           sha256: sha256(memory),
           content: memory,
           source: "create"
         });
+        return created;
       })();
       return character;
     } catch (error) {
@@ -240,7 +241,8 @@ export class CharacterFiles {
   public async applyCuration(
     character: CharacterRow,
     job: CurationJobRow,
-    next: { soul: string; memory: string }
+    next: { soul: string; memory: string },
+    expected?: { soul: string; memory: string }
   ): Promise<void> {
     this.validateMarkdown("SOUL", next.soul, character.name);
     this.validateMarkdown("MEMORY", next.memory, character.name);
@@ -254,6 +256,22 @@ export class CharacterFiles {
       const journalPath = path.join(directory, `.curation-${job.id}.journal.json`);
       try {
         await this.reconcileWithoutLock(character);
+        if (expected) {
+          const [currentSoul, currentMemory] = await Promise.all([
+            readFile(character.soul_path, "utf8"),
+            readFile(character.memory_path, "utf8")
+          ]);
+          if (
+            sha256(currentSoul) !== sha256(expected.soul) ||
+            sha256(currentMemory) !== sha256(expected.memory)
+          ) {
+            throw new SkyError(
+              "Character files changed while curation was running; retrying with the latest edits",
+              "STALE_CURATION",
+              true
+            );
+          }
+        }
         const journal: CurationJournal = {
           version: 1,
           jobId: job.id,

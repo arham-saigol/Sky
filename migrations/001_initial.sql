@@ -1,5 +1,3 @@
-PRAGMA foreign_keys = ON;
-
 CREATE TABLE IF NOT EXISTS schema_migrations (
   version INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
@@ -154,3 +152,9 @@ CREATE TABLE health_checks (
   detail TEXT NOT NULL,
   checked_at TEXT NOT NULL
 );
+
+CREATE INDEX sessions_character_id ON sessions(character_id);
+CREATE INDEX thread_bindings_character_id ON thread_bindings(character_id);
+CREATE INDEX attachments_session_id ON attachments(session_id);
+CREATE INDEX outbound_responses_session_id ON outbound_responses(session_id);
+CREATE INDEX file_revisions_curation_job_id ON file_revisions(curation_job_id);

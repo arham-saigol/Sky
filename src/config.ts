@@ -18,8 +18,8 @@ export const ConfigSchema = z.object({
   dataDir: z.string().min(1),
   logLevel: LogLevelSchema,
   automaticStart: z.boolean(),
-  adultConsentAt: z.string().datetime(),
-  configuredAt: z.string().datetime()
+  adultConsentAt: z.iso.datetime(),
+  configuredAt: z.iso.datetime()
 });
 
 export type SkyConfig = z.infer<typeof ConfigSchema>;

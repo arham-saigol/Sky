@@ -142,6 +142,7 @@ function runFfmpeg(
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
     child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
     child.on("error", reject);
+    child.stdin.on("error", reject);
     child.on("close", (code) => {
       if (code === 0) resolve(Buffer.concat(stdout));
       else

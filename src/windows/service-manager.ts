@@ -7,8 +7,9 @@ import { SkyError } from "../errors.js";
 import { runProcess } from "./process.js";
 
 const SERVICE_ID = "SkyRoleplay";
+const PINNED_WINSW_VERSION = "v2.12.0";
 const WINSW_RELEASE_API =
-  "https://api.github.com/repos/winsw/winsw/releases/latest";
+  `https://api.github.com/repos/winsw/winsw/releases/tags/${PINNED_WINSW_VERSION}`;
 const PINNED_WINSW_SHA256: Record<string, string> = {
   "v2.12.0":
     "05b82d46ad331cc16bdc00de5c6332c1ef818df8ceefcd49c726553209b3a0da"
@@ -159,6 +160,13 @@ export class WindowsServiceManager {
       tag_name?: string;
       assets?: GitHubAsset[];
     };
+    const expected = PINNED_WINSW_SHA256[PINNED_WINSW_VERSION];
+    if (release.tag_name !== PINNED_WINSW_VERSION || !expected) {
+      throw new SkyError(
+        "The pinned WinSW release or its trusted SHA-256 is unavailable",
+        "WINSW_VERIFY"
+      );
+    }
     const asset = release.assets?.find((item) => item.name === "WinSW-x64.exe");
     if (!asset) {
       throw new SkyError(
@@ -177,34 +185,18 @@ export class WindowsServiceManager {
     }
     const bytes = Buffer.from(await response.arrayBuffer());
     const actual = createHash("sha256").update(bytes).digest("hex");
-    let expected =
-      asset.digest?.startsWith("sha256:") ? asset.digest.slice(7) : undefined;
-    expected ??=
-      release.tag_name === undefined
-        ? undefined
-        : PINNED_WINSW_SHA256[release.tag_name];
-    if (!expected) {
-      const checksum = release.assets?.find(
-        (item) =>
-          /sha256/i.test(item.name) &&
-          /\.(txt|sha256|sum)$/i.test(item.name)
-      );
-      if (checksum) {
-        const checksumResponse = await fetch(checksum.browser_download_url, {
-          headers: { "User-Agent": "Sky-Setup" }
-        });
-        if (checksumResponse.ok) {
-          const text = await checksumResponse.text();
-          expected = text
-            .split(/\r?\n/)
-            .find((line) => line.includes(asset.name))
-            ?.match(/[a-fA-F0-9]{64}/)?.[0];
-        }
-      }
-    }
-    if (!expected || expected.toLowerCase() !== actual) {
+    const transitDigest = asset.digest?.startsWith("sha256:")
+      ? asset.digest.slice(7).toLowerCase()
+      : undefined;
+    if (transitDigest && transitDigest !== actual) {
       throw new SkyError(
-        "WinSW download could not be verified against an official SHA-256 digest",
+        "WinSW download did not match GitHub's transit SHA-256 digest",
+        "WINSW_VERIFY"
+      );
+    }
+    if (expected.toLowerCase() !== actual) {
+      throw new SkyError(
+        `WinSW ${PINNED_WINSW_VERSION} did not match Sky's pinned SHA-256`,
         "WINSW_VERIFY"
       );
     }

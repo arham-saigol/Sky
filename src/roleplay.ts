@@ -139,7 +139,7 @@ export class RoleplayEngine {
         .sendText(
           message.threadId,
           `Sky could not process that message: ${safe}`,
-          message.eventId
+          `e-${message.eventId}`
         )
         .catch(() => undefined);
     }
@@ -366,6 +366,7 @@ export class RoleplayEngine {
     spokenRequested: boolean
   ): Promise<string> {
     if (spokenRequested && this.ffmpegPath) {
+      let encoded: Awaited<ReturnType<typeof encodeDiscordVoice>>;
       try {
         const character = this.db.getCharacterById(session.character_id);
         if (!character) throw new Error("Character no longer exists");
@@ -374,14 +375,9 @@ export class RoleplayEngine {
           voice: character.voice,
           ...(expression === undefined ? {} : { expression })
         });
-        const encoded = await encodeDiscordVoice(
+        encoded = await encodeDiscordVoice(
           speech.audio.pcm,
           this.ffmpegPath
-        );
-        return await this.sender.sendVoice(
-          session.thread_id,
-          encoded,
-          triggerId
         );
       } catch (error) {
         this.logger.warn(
@@ -397,6 +393,11 @@ export class RoleplayEngine {
           triggerId
         );
       }
+      return await this.sender.sendVoice(
+        session.thread_id,
+        encoded,
+        triggerId
+      );
     }
     const suffix = spokenRequested
       ? "\n\n_(FFmpeg is unavailable; sent as text. Run `sky doctor`.)_"

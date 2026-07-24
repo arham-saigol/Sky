@@ -8,7 +8,9 @@ import { SkyDatabase } from "../src/db.js";
 import { RoleplayEngine } from "../src/roleplay.js";
 
 const roots: string[] = [];
+const dbs: SkyDatabase[] = [];
 afterEach(async () => {
+  for (const db of dbs.splice(0)) db.close();
   for (const root of roots.splice(0)) {
     await rm(root, { recursive: true, force: true });
   }
@@ -18,6 +20,7 @@ async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), "sky-roleplay-"));
   roots.push(root);
   const db = new SkyDatabase(path.join(root, "sky.sqlite"));
+  dbs.push(db);
   const characters = new CharacterFiles(db, path.join(root, "characters"));
   await characters.initialize();
   const character = await characters.create({
@@ -127,6 +130,57 @@ describe("roleplay authorization and idempotency", () => {
     ).toEqual([
       { role: "owner", content: "Hello" },
       { role: "assistant", content: "Welcome back." }
+    ]);
+    db.close();
+  });
+
+  it("uses a separate nonce for failure notices before response recovery", async () => {
+    const { root, db, characters } = await fixture();
+    const openCode = {
+      roleplay: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("temporary failure"))
+        .mockResolvedValueOnce({
+          content: "Recovered reply.",
+          actualModel: "deepseek-v4-pro",
+          fellBack: false
+        })
+    };
+    const sender = {
+      sendText: vi
+        .fn()
+        .mockResolvedValueOnce("diagnostic-message")
+        .mockResolvedValueOnce("assistant-recovered"),
+      sendVoice: vi.fn()
+    };
+    const engine = new RoleplayEngine(
+      "owner",
+      "guild",
+      root,
+      db,
+      characters,
+      openCode as never,
+      { transcribe: vi.fn() } as never,
+      { synthesize: vi.fn() } as never,
+      sender as never,
+      pino({ enabled: false })
+    );
+    await engine.handle({
+      eventId: "owner-failure",
+      authorId: "owner",
+      guildId: "guild",
+      threadId: "thread",
+      content: "Please retry",
+      createdAt: "2026-01-01T00:00:00.000Z"
+    });
+    expect(sender.sendText.mock.calls[0]?.[2]).toBe("e-owner-failure");
+    await engine.recoverIncomplete();
+    expect(sender.sendText.mock.calls[1]?.[2]).toBe("owner-failure");
+    expect(
+      db.raw.prepare("SELECT role, content FROM messages ORDER BY id").all()
+    ).toEqual([
+      { role: "owner", content: "Please retry" },
+      { role: "assistant", content: "Recovered reply." }
     ]);
     db.close();
   });

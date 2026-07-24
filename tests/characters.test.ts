@@ -8,13 +8,15 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CharacterFiles } from "../src/characters.js";
 import { SkyDatabase } from "../src/db.js";
 
 const roots: string[] = [];
+const dbs: SkyDatabase[] = [];
 
 afterEach(async () => {
+  for (const db of dbs.splice(0)) db.close();
   for (const root of roots.splice(0)) {
     await rm(root, { recursive: true, force: true });
   }
@@ -24,6 +26,7 @@ async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), "sky-char-"));
   roots.push(root);
   const db = new SkyDatabase(path.join(root, "sky.sqlite"));
+  dbs.push(db);
   const files = new CharacterFiles(db, path.join(root, "characters"));
   await files.initialize();
   const character = await files.create({
@@ -49,6 +52,40 @@ describe("character Markdown durability", () => {
       source: "external",
       content: edited
     });
+    db.close();
+  });
+
+  it("rolls back character creation when an initial revision fails", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "sky-char-"));
+    roots.push(root);
+    const db = new SkyDatabase(path.join(root, "sky.sqlite"));
+    dbs.push(db);
+    const files = new CharacterFiles(db, path.join(root, "characters"));
+    await files.initialize();
+    const original = db.recordRevision.bind(db);
+    vi.spyOn(db, "recordRevision")
+      .mockImplementationOnce(original)
+      .mockImplementationOnce(() => {
+        throw new Error("revision write failed");
+      });
+    await expect(
+      files.create({
+        name: "Rollback",
+        identity: "A 30-year-old fictional adult.",
+        personality: "Careful.",
+        appearance: "An adult.",
+        settingAndBoundaries: "Fictional and consensual.",
+        voice: "Katie"
+      })
+    ).rejects.toThrow("revision write failed");
+    expect(db.listCharacters()).toEqual([]);
+    expect(
+      (
+        db.raw.prepare("SELECT COUNT(*) AS count FROM file_revisions").get() as {
+          count: number;
+        }
+      ).count
+    ).toBe(0);
     db.close();
   });
 
@@ -133,6 +170,7 @@ describe("character Markdown durability", () => {
     db.close();
 
     const reopened = new SkyDatabase(databasePath);
+    dbs.push(reopened);
     const recoveredFiles = new CharacterFiles(
       reopened,
       path.join(root, "characters")

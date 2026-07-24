@@ -138,9 +138,13 @@ export class SkyDiscordBot {
   private async handleCommand(
     interaction: ChatInputCommandInteraction
   ): Promise<void> {
+    const inLobby =
+      interaction.channelId === this.config.discordLobbyChannelId ||
+      (interaction.channel?.isThread() === true &&
+        interaction.channel.parentId === this.config.discordLobbyChannelId);
     if (
       ["character", "start"].includes(interaction.commandName) &&
-      interaction.channelId !== this.config.discordLobbyChannelId
+      !inLobby
     ) {
       await interaction.reply({
         content: "Use that command in the configured Sky lobby.",

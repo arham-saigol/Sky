@@ -31,25 +31,29 @@ program
     const service = new WindowsServiceManager(home);
     await service.start();
     const deadline = Date.now() + 45_000;
-    while (Date.now() < deadline) {
-      try {
-        const db = new SkyDatabase(path.join(config.dataDir, "sky.sqlite"));
-        const runtime = db.getServiceState<{
-          state?: string;
-          heartbeatAt?: string;
-          gateway?: { connected?: boolean; ping?: number };
-        }>("runtime");
-        db.close();
-        if (runtime?.state === "running" && runtime.gateway?.connected) {
-          console.log(
-            `Sky is running; Discord Gateway connected (${runtime.gateway.ping ?? -1} ms).`
-          );
-          return;
+    let db: SkyDatabase | undefined;
+    try {
+      while (Date.now() < deadline) {
+        try {
+          db ??= new SkyDatabase(path.join(config.dataDir, "sky.sqlite"));
+          const runtime = db.getServiceState<{
+            state?: string;
+            heartbeatAt?: string;
+            gateway?: { connected?: boolean; ping?: number };
+          }>("runtime");
+          if (runtime?.state === "running" && runtime.gateway?.connected) {
+            console.log(
+              `Sky is running; Discord Gateway connected (${runtime.gateway.ping ?? -1} ms).`
+            );
+            return;
+          }
+        } catch {
+          // Service may still be creating its database.
         }
-      } catch {
-        // Service may still be creating its database.
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
       }
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    } finally {
+      db?.close();
     }
     throw new SkyError(
       "The service started but Discord Gateway readiness was not confirmed within 45 seconds. Run `sky logs` and `sky doctor`.",

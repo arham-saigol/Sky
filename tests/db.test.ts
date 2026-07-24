@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { SkyDatabase } from "../src/db.js";
 
 const roots: string[] = [];
+const dbs: SkyDatabase[] = [];
 
 async function database(): Promise<{
   db: SkyDatabase;
@@ -14,10 +15,13 @@ async function database(): Promise<{
   const root = await mkdtemp(path.join(os.tmpdir(), "sky-db-"));
   roots.push(root);
   const file = path.join(root, "sky.sqlite");
-  return { db: new SkyDatabase(file), root, file };
+  const db = new SkyDatabase(file);
+  dbs.push(db);
+  return { db, root, file };
 }
 
 afterEach(async () => {
+  for (const db of dbs.splice(0)) db.close();
   for (const root of roots.splice(0)) {
     await rm(root, { recursive: true, force: true });
   }
@@ -57,6 +61,7 @@ describe("SQLite persistence and recovery", () => {
     db.close();
 
     const reopened = new SkyDatabase(file);
+    dbs.push(reopened);
     expect(
       (
         reopened.raw

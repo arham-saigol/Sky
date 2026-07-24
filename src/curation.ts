@@ -129,10 +129,15 @@ export class CurationScheduler {
         throw new Error("Curator response used a code fence");
       }
       const parsed = CuratorResponseSchema.parse(JSON.parse(raw));
-      await this.characters.applyCuration(character, job, {
-        soul: parsed.soul_markdown,
-        memory: parsed.memory_markdown
-      });
+      await this.characters.applyCuration(
+        character,
+        job,
+        {
+          soul: parsed.soul_markdown,
+          memory: parsed.memory_markdown
+        },
+        state
+      );
       const updated = this.db.completeCurationJob(job);
       await this.characters.finalizeCuration(character, job);
       this.logger.info(

@@ -3,6 +3,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
+import { INACTIVITY_MS } from "./constants.js";
 import type {
   ModelId,
   SpeakMode,
@@ -418,7 +419,7 @@ export class SkyDatabase {
         );
       if (write.changes > 0) {
         const deadline = new Date(
-          new Date(timestamp).getTime() + 30 * 60 * 1000
+          new Date(timestamp).getTime() + INACTIVITY_MS
         ).toISOString();
         this.raw
           .prepare(

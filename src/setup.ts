@@ -16,6 +16,7 @@ import {
   type SkySecrets
 } from "./config.js";
 import { MODEL_IDS, VOICE_NAMES, type VoiceName } from "./constants.js";
+import { GUILD_COMMANDS } from "./discord/commands.js";
 import { DiscordTransport } from "./discord/transport.js";
 import { SkyError } from "./errors.js";
 import { createLogger } from "./logger.js";
@@ -255,9 +256,9 @@ export async function runSetup(home: string): Promise<void> {
       );
     }
     const commandCount = await discord.registerGuildCommands();
-    if (commandCount !== 8) {
+    if (commandCount !== GUILD_COMMANDS.length) {
       throw new SkyError(
-        `Expected 8 guild commands after registration, received ${commandCount}`,
+        `Expected ${GUILD_COMMANDS.length} guild commands after registration, received ${commandCount}`,
         "DISCORD_COMMANDS"
       );
     }
@@ -283,6 +284,6 @@ export async function runSetup(home: string): Promise<void> {
   await service.install(config);
   if (previousServiceStatus === "running") await service.start();
   console.log(
-    `Sky setup complete. ${automaticStart ? "Automatic-start" : "Manual-start"} Windows service registered and 8 guild commands refreshed.`
+    `Sky setup complete. ${automaticStart ? "Automatic-start" : "Manual-start"} Windows service registered and ${GUILD_COMMANDS.length} guild commands refreshed.`
   );
 }
