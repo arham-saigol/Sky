@@ -241,6 +241,45 @@ describe("character Markdown durability", () => {
     reopened.close();
   });
 
+  it("replays a partial curation journal before an in-process retry", async () => {
+    const { db, files, character } = await fixture();
+    const session = db.createSession({
+      characterId: character.id,
+      threadId: "thread-partial-curation",
+      guildId: "guild",
+      lobbyChannelId: "lobby"
+    });
+    db.appendMessage({
+      sessionId: session.id,
+      discordMessageId: "message-partial-curation",
+      role: "owner",
+      content: "Remember the observatory.",
+      source: "text"
+    });
+    const job = db.createCurationJob(session.id, "inactivity")!;
+    const claimed = db.claimDueCurationJob("2030-01-01T00:00:00.000Z")!;
+    const original = await files.read(character);
+    const curated = {
+      soul: original.soul,
+      memory: "# Persistent memory\n\n- The owner remembers the observatory.\n"
+    };
+    await files.applyCuration(character, claimed, curated);
+    await writeFile(character.memory_path, original.memory);
+
+    await expect(
+      files.recoverCuration(character, claimed)
+    ).resolves.toBe(true);
+    await expect(readFile(character.soul_path, "utf8")).resolves.toBe(
+      curated.soul
+    );
+    await expect(readFile(character.memory_path, "utf8")).resolves.toBe(
+      curated.memory
+    );
+    expect(db.getCurationJob(job.id)?.state).toBe("running");
+    await files.finalizeCuration(character, claimed);
+    db.close();
+  });
+
   it("preserves offline edits that conflict with curation journal recovery", async () => {
     const { root, db, files, character } = await fixture();
     const session = db.createSession({

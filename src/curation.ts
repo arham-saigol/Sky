@@ -4,7 +4,11 @@ import {
   CharacterFiles,
   MAX_CHARACTER_FILE_BYTES
 } from "./characters.js";
-import { SkyDatabase, type CurationJobRow } from "./db.js";
+import {
+  SkyDatabase,
+  type CharacterRow,
+  type CurationJobRow
+} from "./db.js";
 import { safeErrorMessage } from "./errors.js";
 import type { OpenCodeProvider } from "./providers/opencode.js";
 import {
@@ -107,6 +111,15 @@ export class CurationScheduler {
       if (!session || !character) {
         throw new Error("Curation target no longer exists");
       }
+      if (await this.characters.recoverCuration(character, job)) {
+        await this.completeJob(
+          job,
+          session.thread_id,
+          character,
+          "Recovered the durable curation journal"
+        );
+        return;
+      }
       const state = await this.characters.read(character);
       const messages = this.db.messagesInRange(
         job.session_id,
@@ -138,23 +151,12 @@ export class CurationScheduler {
         },
         state
       );
-      const updated = this.db.completeCurationJob(job);
-      const next = await this.sessions.runExclusive(
+      await this.completeJob(
+        job,
         session.thread_id,
-        async () => this.db.createCurationJob(job.session_id, job.trigger)
+        character,
+        parsed.summary
       );
-      await this.characters.finalizeCuration(character, job);
-      this.logger.info(
-        {
-          jobId: job.id,
-          characterId: character.id,
-          trigger: job.trigger,
-          summary: parsed.summary,
-          continuationQueued: Boolean(next)
-        },
-        "Curation completed"
-      );
-      if (updated.state === "ended") await this.tryArchive(updated.id);
     } catch (error) {
       const safe = safeErrorMessage(error);
       this.db.failCurationJob(job, safe);
@@ -163,6 +165,30 @@ export class CurationScheduler {
         "Curation failed and remains queued"
       );
     }
+  }
+
+  private async completeJob(
+    job: CurationJobRow,
+    threadId: string,
+    character: CharacterRow,
+    summary: string
+  ): Promise<void> {
+    const updated = this.db.completeCurationJob(job);
+    const next = await this.sessions.runExclusive(threadId, async () =>
+      this.db.createCurationJob(job.session_id, job.trigger)
+    );
+    await this.characters.finalizeCuration(character, job);
+    this.logger.info(
+      {
+        jobId: job.id,
+        characterId: character.id,
+        trigger: job.trigger,
+        summary,
+        continuationQueued: Boolean(next)
+      },
+      "Curation completed"
+    );
+    if (updated.state === "ended") await this.tryArchive(updated.id);
   }
 
   private async tryArchive(sessionId: string): Promise<void> {

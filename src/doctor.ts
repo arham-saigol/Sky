@@ -322,8 +322,7 @@ export async function runDoctor(options: {
       lobby.nsfw === true,
       lobby.nsfw
         ? "Lobby is marked age-restricted"
-        : "Mark the lobby age-restricted in Discord before adult roleplay",
-      true
+        : "Mark the lobby age-restricted in Discord before adult roleplay"
     );
     const commands = (await discord.rest.get(
       Routes.applicationGuildCommands(

@@ -322,30 +322,48 @@ export class CharacterFiles {
         await atomicWriteText(journalPath, JSON.stringify(journal));
         await atomicWriteText(character.soul_path, next.soul);
         await atomicWriteText(character.memory_path, next.memory);
-        this.db.raw.transaction(() => {
-          const latestSoul = this.db.latestRevision(character.id, "SOUL");
-          if (latestSoul?.sha256 !== sha256(next.soul)) {
-            this.db.recordRevision({
-              characterId: character.id,
-              kind: "SOUL",
-              sha256: sha256(next.soul),
-              content: next.soul,
-              source: "curator",
-              curationJobId: job.id
-            });
+        this.recordCurationRevisions(character, job, next);
+      } catch (error) {
+        try {
+          if (
+            await this.replayCurationJournalWithoutLock(
+              character,
+              job,
+              journalPath
+            )
+          ) {
+            return;
           }
-          const latestMemory = this.db.latestRevision(character.id, "MEMORY");
-          if (latestMemory?.sha256 !== sha256(next.memory)) {
-            this.db.recordRevision({
-              characterId: character.id,
-              kind: "MEMORY",
-              sha256: sha256(next.memory),
-              content: next.memory,
-              source: "curator",
-              curationJobId: job.id
-            });
-          }
-        })();
+        } catch (recoveryError) {
+          throw new AggregateError(
+            [error, recoveryError],
+            "Curation failed and its journal could not be replayed"
+          );
+        }
+        throw error;
+      } finally {
+        await release();
+      }
+    });
+  }
+
+  public async recoverCuration(
+    character: CharacterRow,
+    job: CurationJobRow
+  ): Promise<boolean> {
+    return await this.mutex.runExclusive(character.id, async () => {
+      const directory = path.dirname(character.soul_path);
+      const release = await lockfile.lock(directory, {
+        realpath: false,
+        retries: { retries: 10, minTimeout: 50, maxTimeout: 500 },
+        stale: 60_000
+      });
+      try {
+        return await this.replayCurationJournalWithoutLock(
+          character,
+          job,
+          path.join(directory, `.curation-${job.id}.journal.json`)
+        );
       } finally {
         await release();
       }
@@ -432,6 +450,85 @@ export class CharacterFiles {
         "UNSAFE_CURATION"
       );
     }
+  }
+
+  private recordCurationRevisions(
+    character: CharacterRow,
+    job: CurationJobRow,
+    next: { soul: string; memory: string }
+  ): void {
+    this.db.raw.transaction(() => {
+      for (const [kind, content] of [
+        ["SOUL", next.soul],
+        ["MEMORY", next.memory]
+      ] as const) {
+        if (
+          this.db.latestRevision(character.id, kind)?.sha256 !==
+          sha256(content)
+        ) {
+          this.db.recordRevision({
+            characterId: character.id,
+            kind,
+            sha256: sha256(content),
+            content,
+            source: "curator",
+            curationJobId: job.id
+          });
+        }
+      }
+    })();
+  }
+
+  private async replayCurationJournalWithoutLock(
+    character: CharacterRow,
+    job: CurationJobRow,
+    journalPath: string
+  ): Promise<boolean> {
+    let encoded: string;
+    try {
+      encoded = await readFile(journalPath, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+    const journal = JSON.parse(encoded) as CurationJournal;
+    if (
+      journal.version !== 2 ||
+      journal.jobId !== job.id ||
+      journal.characterId !== character.id ||
+      job.character_id !== character.id
+    ) {
+      throw new SkyError(
+        "Curation journal does not match its database job",
+        "CURATION_JOURNAL_MISMATCH"
+      );
+    }
+    this.validateMarkdown("SOUL", journal.soul, character.name);
+    this.validateMarkdown("MEMORY", journal.memory, character.name);
+    const [currentSoul, currentMemory] = await Promise.all([
+      readFile(character.soul_path, "utf8"),
+      readFile(character.memory_path, "utf8")
+    ]);
+    if (
+      ![journal.baseSoulSha256, sha256(journal.soul)].includes(
+        sha256(currentSoul)
+      ) ||
+      ![journal.baseMemorySha256, sha256(journal.memory)].includes(
+        sha256(currentMemory)
+      )
+    ) {
+      throw new SkyError(
+        "Character files conflict with an incomplete curation journal",
+        "STALE_CURATION"
+      );
+    }
+    await atomicWriteText(character.soul_path, journal.soul);
+    await atomicWriteText(character.memory_path, journal.memory);
+    this.recordCurationRevisions(character, job, {
+      soul: journal.soul,
+      memory: journal.memory
+    });
+    return true;
   }
 
   private async reconcileWithoutLock(character: CharacterRow): Promise<void> {
